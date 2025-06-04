@@ -7,8 +7,12 @@ import com.tangem.blockchain.extensions.Result
 import com.tangem.blockchain.extensions.SimpleResult
 
 class XrpNetworkProviderMock(
-        private val isAccountCreatedResponse: Boolean = true
+    private val isAccountCreatedResponse: Boolean = true,
 ) : XrpNetworkProvider {
+
+    override val baseUrl: String
+        get() = TODO("Not yet implemented")
+
     override suspend fun getInfo(address: String): Result<XrpInfoResponse> {
         TODO("Not yet implemented")
     }
@@ -22,4 +26,8 @@ class XrpNetworkProviderMock(
     }
 
     override suspend fun checkIsAccountCreated(address: String) = isAccountCreatedResponse
+
+    override suspend fun checkDestinationTagRequired(address: String): Boolean {
+        TODO("Not yet implemented")
+    }
 }
