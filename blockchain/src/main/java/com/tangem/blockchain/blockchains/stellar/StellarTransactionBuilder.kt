@@ -8,11 +8,11 @@ import org.stellar.sdk.xdr.DecoratedSignature
 import org.stellar.sdk.xdr.Signature
 import org.stellar.sdk.xdr.SignatureHint
 import java.math.BigInteger
-import java.util.*
+import java.util.Calendar
 
 class StellarTransactionBuilder(
-        private val networkProvider: StellarNetworkProvider,
-        private val publicKey: ByteArray,
+    private val networkProvider: StellarNetworkProvider,
+    private val publicKey: ByteArray,
 ) {
 
     val network: Network = Network.PUBLIC
@@ -20,10 +20,10 @@ class StellarTransactionBuilder(
     var minReserve = 1.toBigDecimal()
     private val blockchain = Blockchain.Stellar
 
+    @Suppress("LongMethod", "CyclomaticComplexMethod")
     suspend fun buildToSign(transactionData: TransactionData, sequence: Long): Result<ByteArray> {
-
         val amount = transactionData.amount
-        val fee = transactionData.fee!!.longValue!!.toInt()
+        val fee = requireNotNull(transactionData.fee?.amount?.longValue).toInt()
         val destinationKeyPair = KeyPair.fromAccountId(transactionData.destinationAddress)
         val sourceKeyPair = KeyPair.fromAccountId(transactionData.sourceAddress)
         val timeBounds = getTimeBounds(transactionData)
@@ -37,7 +37,8 @@ class StellarTransactionBuilder(
 
         val amountType = transactionData.amount.type
         val token = if (amountType is AmountType.Token) amountType.token else null
-        val targetAccountResponse = when (val result =
+        val targetAccountResponse = when (
+            val result =
                 networkProvider.checkTargetAccount(transactionData.destinationAddress, token)
         ) {
             is Result.Success -> result.data
@@ -47,59 +48,69 @@ class StellarTransactionBuilder(
         return when (amount.type) {
             is AmountType.Coin -> {
                 val operation =
-                        if (targetAccountResponse.accountCreated) {
-                            PaymentOperation.Builder(
-                                    destinationKeyPair.accountId,
-                                    AssetTypeNative(),
-                                    amount.value.toString()
-                            ).build()
-                        } else {
-                            if (amount.value!! < minReserve) {
-                                val minAmount = Amount(minReserve, blockchain)
-                                return Result.Failure(BlockchainSdkError.CreateAccountUnderfunded(
+                    if (targetAccountResponse.accountCreated) {
+                        PaymentOperation.Builder(
+                            destinationKeyPair.accountId,
+                            AssetTypeNative(),
+                            amount.value.toString(),
+                        ).build()
+                    } else {
+                        if (amount.value!! < minReserve) {
+                            val minAmount = Amount(minReserve, blockchain)
+                            return Result.Failure(
+                                BlockchainSdkError.CreateAccountUnderfunded(
                                     blockchain = blockchain,
-                                    minReserve = minAmount
-                                ))
-                            }
-                            CreateAccountOperation.Builder(
-                                    destinationKeyPair.accountId,
-                                    amount.value.toString()
-                            ).build()
+                                    minReserve = minAmount,
+                                ),
+                            )
                         }
+                        CreateAccountOperation.Builder(
+                            destinationKeyPair.accountId,
+                            amount.value.toString(),
+                        ).build()
+                    }
                 transaction = operation.toTransaction(sourceKeyPair, sequence, fee, timeBounds, memo)
-                        ?: return Result.Failure(BlockchainSdkError.CustomError("Failed to assemble transaction")) // should not happen
+                    ?: return Result.Failure(BlockchainSdkError.CustomError("Failed to assemble transaction")) // should not happen
 
                 Result.Success(transaction.hash())
-
             }
             is AmountType.Token -> {
                 if (!targetAccountResponse.accountCreated) {
-                    return Result.Failure(BlockchainSdkError.CustomError(
-                        "The destination account is not created. To create account send 1+ XLM."))
+                    return Result.Failure(
+                        BlockchainSdkError.CustomError(
+                            "The destination account is not created. To create account send 1+ XLM.",
+                        ),
+                    )
                 }
 
                 if (!targetAccountResponse.trustlineCreated!!) {
-                    return Result.Failure(BlockchainSdkError.CustomError(
-                        "The destination account does not have a trustline for the asset being sent."))
+                    return Result.Failure(
+                        BlockchainSdkError.CustomError(
+                            "The destination account does not have a trustline for the asset being sent.",
+                        ),
+                    )
                 }
 
-                val asset = Asset.createNonNativeAsset(
-                        amount.currencySymbol,
-                        amount.type.token.contractAddress
-                )
                 val operation: Operation = if (amount.value != null) {
                     PaymentOperation.Builder(
-                            destinationKeyPair.accountId,
-                            asset,
-                            amount.value!!.toPlainString())
-                            .build()
+                        destinationKeyPair.accountId,
+                        Asset.create(null, amount.currencySymbol, amount.type.token.contractAddress),
+                        amount.value.toPlainString(),
+                    )
+                        .build()
                 } else {
-                    ChangeTrustOperation.Builder(asset, "900000000000.0000000")
-                            .setSourceAccount(sourceKeyPair.accountId)
-                            .build()
+                    ChangeTrustOperation.Builder(
+                        ChangeTrustAsset.createNonNativeAsset(
+                            amount.currencySymbol,
+                            amount.type.token.contractAddress,
+                        ),
+                        CHANGE_TRUST_OPERATION_LIMIT,
+                    )
+                        .setSourceAccount(sourceKeyPair.accountId)
+                        .build()
                 }
-                transaction = operation.toTransaction(sourceKeyPair, sequence, fee,timeBounds, memo)
-                        ?: return Result.Failure(BlockchainSdkError.CustomError("Failed to assemble transaction")) // should not happen
+                transaction = operation.toTransaction(sourceKeyPair, sequence, fee, timeBounds, memo)
+                    ?: return Result.Failure(BlockchainSdkError.CustomError("Failed to assemble transaction")) // should not happen
 
                 Result.Success(transaction.hash())
             }
@@ -107,6 +118,7 @@ class StellarTransactionBuilder(
         }
     }
 
+    @Suppress("MagicNumber")
     private fun getTimeBounds(transactionData: TransactionData): TimeBounds {
         val calendar = transactionData.date ?: Calendar.getInstance()
         val minTime = 0L
@@ -115,41 +127,45 @@ class StellarTransactionBuilder(
     }
 
     private fun Operation.toTransaction(
-            sourceKeyPair: KeyPair,
-            sequence: Long,
-            fee: Int,
-            timeBounds: TimeBounds,
-            memo: Memo?
+        sourceKeyPair: KeyPair,
+        sequence: Long,
+        fee: Int,
+        timeBounds: TimeBounds,
+        memo: Memo?,
     ): Transaction? {
-
         val accountID = AccountID()
         accountID.accountID = sourceKeyPair.xdrPublicKey
 
-        val transactionBuilder = Transaction.Builder(
-                Account(sourceKeyPair.accountId, sequence),
-                network
+        val transactionBuilder = TransactionBuilder(
+            Account(sourceKeyPair.accountId, sequence),
+            network,
         )
         transactionBuilder
-                .addOperation(this)
-                .addTimeBounds(timeBounds)
-                .setOperationFee(fee)
+            .addOperation(this)
+            .addTimeBounds(timeBounds)
+            .setBaseFee(fee)
 
         if (memo != null) transactionBuilder.addMemo(memo)
 
         return transactionBuilder.build()
     }
 
+    @Suppress("MagicNumber")
     fun buildToSend(signature: ByteArray): String {
         val hint = publicKey.takeLast(4).toByteArray()
         val decoratedSignature = DecoratedSignature().apply {
             this.hint = SignatureHint().apply { signatureHint = hint }
             this.signature = Signature().apply { this.signature = signature }
         }
-        transaction.signatures.add(decoratedSignature)
+        transaction.addSignature(decoratedSignature)
         return transaction.toEnvelopeXdrBase64()
     }
 
-    fun getTransactionHash() = transaction.hash()
+    fun getTransactionHash(): ByteArray = transaction.hash()
+
+    private companion object {
+        const val CHANGE_TRUST_OPERATION_LIMIT = "900000000000.0000000"
+    }
 }
 
 data class StellarTransactionExtras(val memo: StellarMemo) : TransactionExtras
@@ -165,8 +181,8 @@ private fun StellarMemo.toStellarSdkMemo(): Memo {
         is StellarMemo.Text -> Memo.text(this.value)
         is StellarMemo.Id -> {
             val id = this.value
-            if (id !in BigInteger.ZERO..(Long.MAX_VALUE.toBigInteger() * 2.toBigInteger())) { // ID is uint64
-                throw Exception("ID value out of uint64 range")
+            if (id !in BigInteger.ZERO..Long.MAX_VALUE.toBigInteger() * 2.toBigInteger()) { // ID is uint64
+                error("ID value out of uint64 range")
             }
             Memo.id(id.toLong())
         }

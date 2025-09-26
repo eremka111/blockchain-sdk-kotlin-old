@@ -1,15 +1,18 @@
 package com.tangem.blockchain.blockchains.ethereum.network
 
 import com.squareup.moshi.JsonClass
-import retrofit2.http.Body
-import retrofit2.http.Headers
-import retrofit2.http.POST
-import retrofit2.http.Url
+import com.tangem.blockchain.common.NowNodeCredentials
+import retrofit2.http.*
 
 interface EthereumApi {
     @Headers("Content-Type: application/json")
-    @POST()
-    suspend fun post(@Body body: EthereumBody?, @Url infuraProjectId: String): EthereumResponse
+    @POST
+    suspend fun post(
+        @Body body: EthereumBody?,
+        @Url infuraProjectId: String,
+        @Header("Authorization") token: String? = null,
+        @Header(NowNodeCredentials.headerApiKey) nowNodesApiKey: String? = null,
+    ): EthereumResponse
 }
 
 @JsonClass(generateAdapter = true)
@@ -17,7 +20,7 @@ data class EthereumBody(
     val method: String,
     val params: List<Any> = listOf(),
     val jsonrpc: String = "2.0",
-    val id: Int = 67
+    val id: Int = 67,
 )
 
 data class EthCallObject(
@@ -33,12 +36,11 @@ enum class EthereumMethod(val value: String) {
     CALL("eth_call"),
     SEND_RAW_TRANSACTION("eth_sendRawTransaction"),
     ESTIMATE_GAS("eth_estimateGas"),
-    GAS_PRICE("eth_gasPrice")
+    GAS_PRICE("eth_gasPrice"),
 }
 
 enum class EthBlockParam(val value: String) {
     EARLIEST("earliest"),
     LATEST("latest"),
-    PENDING("pending")
+    PENDING("pending"),
 }
-

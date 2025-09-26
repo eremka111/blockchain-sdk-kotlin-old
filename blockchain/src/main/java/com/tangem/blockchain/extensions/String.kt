@@ -13,6 +13,7 @@ fun String.decodeBase58(checked: Boolean = false): ByteArray? {
     }
 }
 
+@Suppress("MagicNumber")
 fun String.decodeBech32(): ByteArray? {
     return try {
         val decoded: ByteArray = Bech32.decode(this).data
@@ -22,6 +23,18 @@ fun String.decodeBech32(): ByteArray? {
     }
 }
 
-fun String.hexToBigDecimal(): BigDecimal? {
-    return removePrefix("0x").toBigIntegerOrNull(16)?.toBigDecimal()
+@Suppress("MagicNumber")
+fun String.hexToBigDecimal(default: BigDecimal = BigDecimal.ZERO): BigDecimal {
+    return removePrefix("0x").toBigIntegerOrNull(16)?.toBigDecimal() ?: default
+}
+
+fun String?.toBigDecimalOrDefault(default: BigDecimal = BigDecimal.ZERO): BigDecimal =
+    this?.toBigDecimalOrNull() ?: default
+
+fun String.isValidHex(): Boolean = this.all { it.isAscii() }
+
+inline fun <R> String?.letNotBlank(block: (String) -> R): R? {
+    if (isNullOrBlank()) return null
+
+    return block(this)
 }

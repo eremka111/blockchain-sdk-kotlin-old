@@ -1,10 +1,10 @@
 package com.tangem.blockchain.common
 
 import com.google.common.truth.Truth
+import com.tangem.blockchain.common.derivation.DerivationStyle
 import org.junit.Test
 
 internal class DerivationStyleTests {
-
 
     @Test
     fun testDerivationStyles() {
@@ -35,5 +35,4 @@ internal class DerivationStyleTests {
         Truth.assertThat(xrp.derivationPath(new)!!.rawPath)
             .isEqualTo("m/44'/144'/0'/0/0")
     }
-
 }

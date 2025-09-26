@@ -1,6 +1,10 @@
 package com.tangem.blockchain.blockchains.ethereum.network
 
-import com.tangem.blockchain.common.*
+import com.tangem.blockchain.blockchains.ethereum.EthereumUtils
+import com.tangem.blockchain.common.Blockchain
+import com.tangem.blockchain.common.BlockchainSdkError
+import com.tangem.blockchain.common.Token
+import com.tangem.blockchain.common.toBlockchainSdkError
 import com.tangem.blockchain.extensions.Result
 import com.tangem.blockchain.extensions.SimpleResult
 import com.tangem.blockchain.network.MultiNetworkProvider
@@ -12,22 +16,19 @@ import kotlinx.coroutines.coroutineScope
 import java.math.BigDecimal
 import java.math.BigInteger
 
-class EthereumNetworkService(
+open class EthereumNetworkService(
     jsonRpcProviders: List<EthereumJsonRpcProvider>,
     private val blockcypherNetworkProvider: BlockcypherNetworkProvider? = null,
     private val blockchairEthNetworkProvider: BlockchairEthNetworkProvider? = null,
 ) : EthereumNetworkProvider {
 
     private val multiJsonRpcProvider = MultiNetworkProvider(jsonRpcProviders)
-    override val host
-        get() = multiJsonRpcProvider.currentProvider.host
+    override val baseUrl
+        get() = multiJsonRpcProvider.currentProvider.baseUrl
 
     private val decimals = Blockchain.Ethereum.decimals()
 
-    override suspend fun getInfo(
-        address: String,
-        tokens: Set<Token>,
-    ): Result<EthereumInfoResponse> {
+    override suspend fun getInfo(address: String, tokens: Set<Token>): Result<EthereumInfoResponse> {
         return try {
             coroutineScope {
                 val balanceResponseDeferred = async {
@@ -43,7 +44,12 @@ class EthereumNetworkService(
                     blockchairEthNetworkProvider?.getTransactions(address, tokens)
                 }
 
-                val balance = balanceResponseDeferred.await().extractResult().parseAmount(decimals)
+                val balance = balanceResponseDeferred.await().extractResult().let { balanceResponse ->
+                    requireNotNull(
+                        value = EthereumUtils.parseEthereumDecimal(value = balanceResponse, decimalsCount = decimals),
+                        lazyMessage = { "Error while parsing balance. Balance response: $balanceResponse" },
+                    )
+                }
                 val txCount = txCountResponseDeferred.await().extractResult().responseToBigInteger().toLong()
                 val pendingTxCount = pendingTxCountResponseDeferred.await().extractResult()
                     .responseToBigInteger().toLong()
@@ -61,8 +67,8 @@ class EthereumNetworkService(
                         tokenBalances = tokenBalances,
                         txCount = txCount,
                         pendingTxCount = pendingTxCount,
-                        recentTransactions = recentTransactions
-                    )
+                        recentTransactions = recentTransactions,
+                    ),
                 )
             }
         } catch (exception: Exception) {
@@ -70,15 +76,15 @@ class EthereumNetworkService(
         }
     }
 
-    override suspend fun getAllowance(ownerAddress: String, token: Token, spenderAddress: String): Result<Amount> {
+    override suspend fun getAllowance(ownerAddress: String, token: Token, spenderAddress: String): Result<BigDecimal> {
         return try {
             val requestData = EthereumTokenAllowanceRequestData(ownerAddress, token.contractAddress, spenderAddress)
             val amountValue = multiJsonRpcProvider.performRequest(
                 request = EthereumJsonRpcProvider::getTokenAllowance,
-                data = requestData
+                data = requestData,
             ).extractResult().parseAmount(token.decimals)
 
-            Result.Success(Amount(token, amountValue))
+            Result.Success(amountValue)
         } catch (exception: Exception) {
             Result.Failure(exception.toBlockchainSdkError())
         }
@@ -97,10 +103,10 @@ class EthereumNetworkService(
 
     suspend fun sendRawTransaction(transaction: String): Result<String> {
         return try {
-            val tx_id = multiJsonRpcProvider
+            val txId = multiJsonRpcProvider
                 .performRequest(EthereumJsonRpcProvider::sendTransaction, transaction)
                 .extractResult()
-            Result.Success(tx_id)
+            Result.Success(txId)
         } catch (exception: Exception) {
             Result.Failure(exception.toBlockchainSdkError())
         }
@@ -111,10 +117,7 @@ class EthereumNetworkService(
             ?: Result.Failure(BlockchainSdkError.CustomError("No signature count provider found"))
     }
 
-    override suspend fun getTokensBalance(
-        address: String,
-        tokens: Set<Token>,
-    ): Result<Map<Token, BigDecimal>> {
+    override suspend fun getTokensBalance(address: String, tokens: Set<Token>): Result<Map<Token, BigDecimal>> {
         return try {
             Result.Success(getTokensBalanceInternal(address, tokens))
         } catch (exception: Exception) {
@@ -122,10 +125,7 @@ class EthereumNetworkService(
         }
     }
 
-    private suspend fun getTokensBalanceInternal(
-        address: String,
-        tokens: Set<Token>,
-    ): Map<Token, BigDecimal> {
+    private suspend fun getTokensBalanceInternal(address: String, tokens: Set<Token>): Map<Token, BigDecimal> {
         return coroutineScope {
             val tokenBalancesDeferred = tokens.map { token ->
                 token to async {
@@ -133,14 +133,16 @@ class EthereumNetworkService(
                         EthereumJsonRpcProvider::getTokenBalance,
                         EthereumTokenBalanceRequestData(
                             address,
-                            token.contractAddress
-                        )
+                            token.contractAddress,
+                        ),
                     )
                 }
             }.toMap()
             val tokenBalanceResponses = tokenBalancesDeferred.mapValues { it.value.await() }
             tokenBalanceResponses.mapValues {
-                it.value.extractResult().parseAmount(it.key.decimals)
+                requireNotNull(EthereumUtils.parseEthereumDecimal(it.value.extractResult(), it.key.decimals)) {
+                    "Failed to parse token balance. Token: ${it.key.name}. Balance: ${it.value.extractResult()}"
+                }
             }
         }
     }
@@ -153,23 +155,15 @@ class EthereumNetworkService(
     override suspend fun getGasPrice(): Result<BigInteger> {
         return try {
             coroutineScope {
-                val gasPriceResponses = multiJsonRpcProvider.providers.map {
-                    async { it.getGasPrice() }
-                }.map { it.await() }
-
-                val gasPrice = gasPriceResponses.filter { it is Result.Success }
-                    .map { it.extractResult().responseToBigInteger() }.maxOrNull()
-                // all responses have failed
-                    ?: return@coroutineScope Result.Failure(
-                        (gasPriceResponses.first() as Result.Failure).error
-                    )
+                val gasPrice = multiJsonRpcProvider.performRequest(
+                    EthereumJsonRpcProvider::getGasPrice,
+                ).extractResult().responseToBigInteger()
 
                 Result.Success(gasPrice)
             }
         } catch (exception: Exception) {
             Result.Failure(exception.toBlockchainSdkError())
         }
-
     }
 
     override suspend fun getGasLimit(to: String, from: String, value: String?, data: String?): Result<BigInteger> {
@@ -177,35 +171,49 @@ class EthereumNetworkService(
             coroutineScope {
                 val gasLimit = multiJsonRpcProvider.performRequest(
                     EthereumJsonRpcProvider::getGasLimit,
-                    EthCallObject(to, from, value, data)
+                    EthCallObject(to, from, value, data),
                 ).extractResult().responseToBigInteger()
                 Result.Success(gasLimit)
             }
+        } catch (exception: Exception) {
+            if (exception.message?.contains("gas required exceeds allowance", true) == true) {
+                Result.Failure(
+                    Exception("Not enough funds for the transaction. Please top up your account.")
+                        .toBlockchainSdkError(),
+                )
+            } else {
+                Result.Failure(exception.toBlockchainSdkError())
+            }
+        }
+    }
+
+    override suspend fun callContractForFee(data: ContractCallData): Result<BigInteger> {
+        return try {
+            val result = multiJsonRpcProvider.performRequest(EthereumJsonRpcProvider::call, data)
+                .extractResult().responseToBigInteger()
+            Result.Success(result)
         } catch (exception: Exception) {
             Result.Failure(exception.toBlockchainSdkError())
         }
     }
 
-    private fun String.responseToBigInteger() =
-        this.substring(2).ifBlank { "0" }.toBigInteger(16)
+    @Suppress("MagicNumber")
+    private fun String.responseToBigInteger() = this.substring(2).ifBlank { "0" }.toBigInteger(16)
 
-    private fun String.parseAmount(decimals: Int) =
-        this.responseToBigInteger().toBigDecimal().movePointLeft(decimals)
+    private fun String.parseAmount(decimals: Int) = this.responseToBigInteger().toBigDecimal().movePointLeft(decimals)
 
-    private fun EthereumError.toException() =
-        Exception("Code: ${this.code}, ${this.message}")
-
-    private fun Result<EthereumResponse>.extractResult(): String =
-        when (this) {
-            is Result.Success -> {
-                this.data.result
-                    ?: throw this.data.error?.toException()?.toBlockchainSdkError()
-                        ?: BlockchainSdkError.CustomError("Unknown response format")
-            }
-
-            is Result.Failure -> {
-                throw (this.error as? BlockchainSdkError)
-                    ?: BlockchainSdkError.CustomError("Unknown error format")
-            }
+    private fun Result<EthereumResponse>.extractResult(): String = when (this) {
+        is Result.Success -> {
+            this.data.result
+                ?: throw this.data.error?.let { error ->
+                    BlockchainSdkError.Ethereum.Api(
+                        code = error.code ?: 0,
+                        message = error.message ?: "No error message",
+                    )
+                } ?: BlockchainSdkError.CustomError("Unknown response format")
         }
+        is Result.Failure -> {
+            throw this.error as? BlockchainSdkError ?: BlockchainSdkError.CustomError("Unknown error format")
+        }
+    }
 }

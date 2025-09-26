@@ -4,9 +4,7 @@ import com.squareup.moshi.Json
 import com.tangem.blockchain.blockchains.cardano.CardanoUnspentOutput
 import com.tangem.blockchain.blockchains.cardano.network.CardanoAddressResponse
 import com.tangem.blockchain.blockchains.cardano.network.CardanoNetworkProvider
-import com.tangem.blockchain.blockchains.cardano.network.api.AdaliteApi
 import com.tangem.blockchain.common.Blockchain
-import com.tangem.blockchain.common.BlockchainSdkError
 import com.tangem.blockchain.common.toBlockchainSdkError
 import com.tangem.blockchain.extensions.Result
 import com.tangem.blockchain.extensions.SimpleResult
@@ -14,13 +12,15 @@ import com.tangem.blockchain.extensions.encodeBase64NoWrap
 import com.tangem.blockchain.extensions.retryIO
 import com.tangem.blockchain.network.createRetrofitInstance
 import com.tangem.common.extensions.hexToBytes
+import com.tangem.common.extensions.toHexString
 import kotlinx.coroutines.async
 import kotlinx.coroutines.coroutineScope
 import retrofit2.HttpException
+import java.io.IOException
 
 class AdaliteNetworkProvider(baseUrl: String) : CardanoNetworkProvider {
 
-    override val host: String = baseUrl
+    override val baseUrl: String = baseUrl
 
     private val api: AdaliteApi by lazy {
         createRetrofitInstance(baseUrl).create(AdaliteApi::class.java)
@@ -35,23 +35,26 @@ class AdaliteNetworkProvider(baseUrl: String) : CardanoNetworkProvider {
                 val addressesData = addressesDeferred.map { it.await() }
                 val unspents = unspentsDeferred.await()
 
-                val cardanoUnspents = unspents.data!!.map {
-                    CardanoUnspentOutput(
-                        it.address!!,
-                        it.amountData!!.amount!!,
-                        it.outputIndex!!.toLong(),
-                        it.hash!!.hexToBytes()
-                    )
-                }
+                val cardanoUnspents = unspents.data
+                    // we need to ignore unspents with tokens (until we start supporting tokens)
+                    .filter { it.amountData.tokens.isEmpty() }
+                    .map {
+                        CardanoUnspentOutput(
+                            address = it.address,
+                            amount = it.amountData.amount,
+                            outputIndex = it.outputIndex.toLong(),
+                            transactionHash = it.hash.hexToBytes(),
+                        )
+                    }
                 val recentTransactionsHashes = addressesData
                     .flatMap { it.data!!.transactions!!.mapNotNull { it.hash } }
 
                 Result.Success(
                     CardanoAddressResponse(
-                        addressesData.map { it.data!!.balanceData!!.amount!! }.sum(),
-                        cardanoUnspents,
-                        recentTransactionsHashes
-                    )
+                        balance = cardanoUnspents.sumOf { it.amount },
+                        unspentOutputs = cardanoUnspents,
+                        recentTransactionsHashes = recentTransactionsHashes,
+                    ),
                 )
             }
         } catch (exception: Exception) {
@@ -64,20 +67,24 @@ class AdaliteNetworkProvider(baseUrl: String) : CardanoNetworkProvider {
             retryIO { api.sendTransaction(AdaliteSendBody(transaction.encodeBase64NoWrap())) }
             SimpleResult.Success
         } catch (exception: Exception) {
-            if (exception is HttpException && exception.code() == 400) {
-                val error = BlockchainSdkError.SendException(
-                    Blockchain.Cardano,
-                    "Failed to send transaction: $transaction"
+            if (exception is HttpException && exception.code() == HTTP_BAD_REQUEST_CODE) {
+                val error = IOException(
+                    "${Blockchain.Cardano}. Failed to send transaction ${transaction.toHexString()}\nwith an error: " +
+                        "\n${exception.response()?.errorBody()?.string()}",
                 )
-                SimpleResult.Failure(error)
+                SimpleResult.Failure(error.toBlockchainSdkError())
             } else {
                 SimpleResult.Failure(exception.toBlockchainSdkError())
             }
         }
     }
+
+    private companion object {
+        const val HTTP_BAD_REQUEST_CODE = 400
+    }
 }
 
 data class AdaliteSendBody(
     @Json(name = "signedTx")
-    val signedTransaction: String
+    val signedTransaction: String,
 )

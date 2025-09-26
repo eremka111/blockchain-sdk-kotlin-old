@@ -3,36 +3,54 @@ package com.tangem.blockchain.blockchains.stellar
 import com.tangem.blockchain.common.*
 import com.tangem.blockchain.extensions.Result
 import com.tangem.blockchain.extensions.SimpleResult
-import com.tangem.blockchain.network.API_STELLAR
-import com.tangem.blockchain.network.API_STELLAR_TESTNET
+import com.tangem.blockchain.extensions.successOr
+import com.tangem.blockchain.network.MultiNetworkProvider
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.withContext
 import org.stellar.sdk.*
 import org.stellar.sdk.requests.ErrorResponse
-import org.stellar.sdk.requests.RequestBuilder
 import org.stellar.sdk.responses.FeeStatsResponse
 import org.stellar.sdk.responses.operations.CreateAccountOperationResponse
 import org.stellar.sdk.responses.operations.OperationResponse
 import org.stellar.sdk.responses.operations.PaymentOperationResponse
 import java.net.URISyntaxException
 import java.text.SimpleDateFormat
-import java.util.*
+import java.util.Calendar
+import java.util.Locale
 
-class StellarNetworkService(isTestnet: Boolean) : StellarNetworkProvider {
-    override val host: String = if (isTestnet) API_STELLAR_TESTNET else API_STELLAR
+internal const val RECORD_LIMIT = 200
+
+class StellarNetworkService(
+    hosts: List<StellarNetwork>,
+    isTestnet: Boolean,
+) : StellarNetworkProvider {
+
     private val blockchain = Blockchain.Stellar
     private val dateFormat = SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss'Z'", Locale.ROOT)
-    private val recordsLimitCap = 200
     private val decimals = blockchain.decimals()
 
     val network: Network = if (isTestnet) Network.TESTNET else Network.PUBLIC
-    private val stellarServer by lazy { Server(host) }
+    private val stellarMultiProvider = MultiNetworkProvider(
+        providers = hosts.map {
+            StellarWrapperNetworkProvider(
+                server = Server(it.url),
+                url = it.url,
+            )
+        },
+    )
+
+    override val baseUrl: String = stellarMultiProvider.currentProvider.baseUrl
 
     override suspend fun sendTransaction(transaction: String): SimpleResult {
         return try {
-            val response = stellarServer.submitTransaction(Transaction.fromEnvelopeXdr(transaction, network))
+            val response = stellarMultiProvider.performRequest(
+                request = StellarWrapperNetworkProvider::submitTransaction,
+                data = Transaction.fromEnvelopeXdr(transaction, network) as Transaction,
+            ).successOr {
+                return SimpleResult.Failure(it.error)
+            }
             if (response.isSuccess) {
                 SimpleResult.Success
             } else {
@@ -49,28 +67,30 @@ class StellarNetworkService(isTestnet: Boolean) : StellarNetworkProvider {
         }
     }
 
-    override suspend fun checkTargetAccount(
-        address: String,
-        token: Token?
-    ): Result<StellarTargetAccountResponse> {
+    override suspend fun checkTargetAccount(address: String, token: Token?): Result<StellarTargetAccountResponse> {
         return try {
-            val account = stellarServer.accounts().account(address)
+            val account = stellarMultiProvider.performRequest(StellarWrapperNetworkProvider::accountCall, address)
+                .successOr {
+                    return Result.Failure(it.error)
+                }
 
             if (token == null) { // xlm transaction
                 Result.Success(StellarTargetAccountResponse(accountCreated = true))
             } else { // token transaction
+                // tokenBalance can be null if trustline not created
                 val tokenBalance = account.balances
-                        .filter { it.assetCode == token.symbol }
-                        .find { it.assetIssuer == token.contractAddress } // null if trustline not created
+                    .filter { it.assetCode.isPresent && it.assetIssuer.isPresent }
+                    .filter { it.assetCode.get() == token.symbol }
+                    .find { it.assetIssuer.get() == token.contractAddress } // null if trustline not created
                 Result.Success(
                     StellarTargetAccountResponse(
                         accountCreated = true,
-                        trustlineCreated = tokenBalance != null
-                    )
+                        trustlineCreated = tokenBalance != null,
+                    ),
                 )
             }
         } catch (errorResponse: ErrorResponse) {
-            if (errorResponse.code == 404) {
+            if (errorResponse.code == HTTP_NOT_FOUND_CODE) {
                 Result.Success(StellarTargetAccountResponse(accountCreated = false))
             } else {
                 Result.Failure(errorResponse.toBlockchainSdkError())
@@ -83,25 +103,46 @@ class StellarNetworkService(isTestnet: Boolean) : StellarNetworkProvider {
     override suspend fun getInfo(accountId: String): Result<StellarResponse> {
         return try {
             coroutineScope {
-                val accountResponseDeferred = async(Dispatchers.IO) { stellarServer.accounts().account(accountId) }
+                val accountResponseDeferred = async(Dispatchers.IO) {
+                    stellarMultiProvider.performRequest(StellarWrapperNetworkProvider::accountCall, accountId)
+                        .successOr {
+                            throw it.error
+                        }
+                }
                 val ledgerResponseDeferred = async(Dispatchers.IO) {
-                    val latestLedger: Int = stellarServer.root().historyLatestLedger
-                    stellarServer.ledgers().ledger(latestLedger.toLong())
+                    val latestLedger =
+                        stellarMultiProvider.performRequest(StellarWrapperNetworkProvider::rootCall).successOr {
+                            throw it.error
+                        }.historyLatestLedger
+
+                    stellarMultiProvider.performRequest(
+                        StellarWrapperNetworkProvider::ledgerCall,
+                        latestLedger.toLong(),
+                    ).successOr {
+                        throw it.error
+                    }
                 }
                 val paymentsResponseDeferred = async(Dispatchers.IO) {
-                    stellarServer.payments().forAccount(accountId).order(RequestBuilder.Order.DESC).execute()
+                    stellarMultiProvider.performRequest(StellarWrapperNetworkProvider::paymentsCall, accountId)
+                        .successOr {
+                            throw it.error
+                        }
                 }
 
                 val accountResponse = accountResponseDeferred.await()
                 val coinBalance = accountResponse.balances
-                        .find { it.asset is AssetTypeNative }?.balance?.toBigDecimal()
-                        ?: return@coroutineScope Result.Failure(
-                            BlockchainSdkError.CustomError("Stellar Balance not found")
-                        )
+                    .find { it.asset.isPresent && it.asset.get() is AssetTypeNative }
+                    ?.balance?.toBigDecimal()
+                    ?: return@coroutineScope Result.Failure(
+                        BlockchainSdkError.CustomError("Stellar Balance not found"),
+                    )
 
-                val tokenBalances = accountResponse.balances.filter { it.asset !is AssetTypeNative }.map {
-                    StellarAssetBalance(it.balance.toBigDecimal(), it.assetCode, it.assetIssuer)
-                }
+                val tokenBalances = accountResponse.balances
+                    .filter { it.asset.isPresent && it.assetCode.isPresent && it.assetIssuer.isPresent }
+                    .filter { it.asset.get() !is AssetTypeNative }
+                    .map {
+                        StellarAssetBalance(it.balance.toBigDecimal(), it.assetCode.get(), it.assetIssuer.get())
+                    }
 
                 val ledgerResponse = ledgerResponseDeferred.await()
                 val baseFee = ledgerResponse.baseFeeInStroops.toBigDecimal().movePointLeft(decimals)
@@ -117,13 +158,13 @@ class StellarNetworkService(isTestnet: Boolean) : StellarNetworkProvider {
                         baseReserve = baseReserve,
                         sequence = accountResponse.sequenceNumber,
                         recentTransactions = recentTransactions,
-                        subEntryCount = accountResponse.subentryCount
-                    )
+                        subEntryCount = accountResponse.subentryCount,
+                    ),
                 )
             }
         } catch (exception: Exception) {
-            if (exception is ErrorResponse && exception.code == 404) {
-                Result.Failure(BlockchainSdkError.AccountNotFound)
+            if (exception is ErrorResponse && exception.code == HTTP_NOT_FOUND_CODE) {
+                Result.Failure(BlockchainSdkError.AccountNotFound())
             } else {
                 Result.Failure(exception.toBlockchainSdkError())
             }
@@ -131,26 +172,23 @@ class StellarNetworkService(isTestnet: Boolean) : StellarNetworkProvider {
     }
 
     override suspend fun getFeeStats(): Result<FeeStatsResponse> = withContext(Dispatchers.IO) {
-        try {
-            val feeStats = stellarServer.feeStats().execute()
-            Result.Success(feeStats)
-        } catch (ex: Exception) {
-            Result.Failure(ex.toBlockchainSdkError())
-        }
+        stellarMultiProvider.performRequest(StellarWrapperNetworkProvider::feeCall)
     }
 
     override suspend fun getSignatureCount(accountId: String): Result<Int> {
         return try {
             coroutineScope {
-                var operationsPage = stellarServer.operations().forAccount(accountId)
-                        .limit(recordsLimitCap)
-                        .includeFailed(true)
-                        .execute()
+                var operationsPage = stellarMultiProvider.performRequest(
+                    StellarWrapperNetworkProvider::operationsLimit,
+                    accountId,
+                ).successOr {
+                    throw it.error
+                }
                 val operations = operationsPage.records
 
-                while (operationsPage.records.size == recordsLimitCap) {
+                while (operationsPage.records.size == RECORD_LIMIT) {
                     try {
-                        operationsPage = operationsPage.getNextPage(stellarServer.httpClient)
+                        operationsPage = operationsPage.getNextPage(stellarMultiProvider.currentProvider.httpClient)
                         operations.addAll(operationsPage.records)
                     } catch (e: URISyntaxException) {
                         break
@@ -172,28 +210,24 @@ class StellarNetworkService(isTestnet: Boolean) : StellarNetworkProvider {
     }
 
     private fun PaymentOperationResponse.toTransactionData(): TransactionData {
-        val asset = asset
-        val amount = when (asset) {
+        val amount = when (val asset = asset) {
             is AssetTypeNative -> Amount(amount.toBigDecimal(), blockchain)
             is AssetTypeCreditAlphaNum -> Amount(
                 currencySymbol = asset.code,
                 value = amount.toBigDecimal(),
                 decimals = decimals,
-                type = AmountType.Token(Token(asset.code, asset.issuer, decimals))
+                type = AmountType.Token(Token(asset.code, asset.issuer, decimals)),
             )
-            else -> throw Exception("Unknown asset type")
+            else -> error("Unknown asset type")
         }
-        val issuer = (asset as? AssetTypeCreditAlphaNum)?.issuer
-
         return TransactionData(
             amount = amount,
             fee = null,
             sourceAddress = from,
             destinationAddress = to,
-            contractAddress = issuer,
             status = TransactionStatus.Confirmed,
             date = Calendar.getInstance().apply { time = dateFormat.parse(createdAt)!! },
-            hash = transactionHash
+            hash = transactionHash,
         )
     }
 
@@ -205,7 +239,11 @@ class StellarNetworkService(isTestnet: Boolean) : StellarNetworkProvider {
             destinationAddress = account,
             status = TransactionStatus.Confirmed,
             date = Calendar.getInstance().apply { time = dateFormat.parse(createdAt)!! },
-            hash = transactionHash
+            hash = transactionHash,
         )
+    }
+
+    companion object {
+        const val HTTP_NOT_FOUND_CODE = 404
     }
 }

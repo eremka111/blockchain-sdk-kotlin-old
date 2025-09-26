@@ -5,6 +5,7 @@ import co.nstant.`in`.cbor.CborEncoder
 import com.tangem.blockchain.blockchains.cardano.CardanoUnspentOutput
 import com.tangem.blockchain.blockchains.cardano.network.CardanoAddressResponse
 import com.tangem.blockchain.blockchains.cardano.network.CardanoNetworkProvider
+import com.tangem.blockchain.blockchains.cardano.network.RosettaNetwork
 import com.tangem.blockchain.blockchains.cardano.network.rosetta.model.RosettaAccountIdentifier
 import com.tangem.blockchain.blockchains.cardano.network.rosetta.model.RosettaAddressBody
 import com.tangem.blockchain.blockchains.cardano.network.rosetta.model.RosettaNetworkIdentifier
@@ -20,12 +21,12 @@ import kotlinx.coroutines.async
 import kotlinx.coroutines.coroutineScope
 import java.io.ByteArrayOutputStream
 
-class RosettaNetworkProvider(baseUrl: String) : CardanoNetworkProvider {
+class RosettaNetworkProvider(rosettaNetwork: RosettaNetwork) : CardanoNetworkProvider {
 
-    override val host: String = baseUrl
+    override val baseUrl: String = rosettaNetwork.url
 
     private val api: RosettaApi by lazy {
-        createRetrofitInstance(baseUrl).create(RosettaApi::class.java)
+        createRetrofitInstance(rosettaNetwork.url).create(RosettaApi::class.java)
     }
 
     private val networkIdentifier = RosettaNetworkIdentifier("cardano", "mainnet")
@@ -39,37 +40,33 @@ class RosettaNetworkProvider(baseUrl: String) : CardanoNetworkProvider {
             coroutineScope {
                 val addressBodies = addresses
                     .map { RosettaAddressBody(networkIdentifier, RosettaAccountIdentifier(it)) }
-                val balancesDeferred =
-                    addressBodies.map { retryIO { async { api.getBalances(it) } } }
                 val coinsDeferred = addressBodies.map {
                     it.accountIdentifier.address!! to retryIO { async { api.getCoins(it) } }
                 }.toMap()
 
-                val balances = balancesDeferred.map { it.await() }
-                val balance = balances.map {
-                    it.balances!!.find { it.currency!!.symbol == "ADA" }!!.value!!
-                }.sum()
-
                 val coinsMap = coinsDeferred.mapValues { it.value.await().coins!! }
                 val unspentOutputs = coinsMap.flatMap { entry ->
                     entry.value.mapNotNull {
-                        if (it.amount!!.currency!!.symbol == "ADA") {
+                        if (it.amount!!.currency!!.symbol == "ADA" &&
+                            it.metadata == null // filter tokens while we don't support them
+                        ) {
                             val identifierSplit =
                                 it.coinIdentifier!!.identifier!!.split(":")
                             CardanoUnspentOutput(
                                 address = entry.key,
                                 amount = it.amount.value!!,
                                 outputIndex = identifierSplit[1].toLong(),
-                                transactionHash = identifierSplit[0].hexToBytes()
+                                transactionHash = identifierSplit[0].hexToBytes(),
                             )
                         } else {
                             null
                         }
                     }
                 }
+                val balance = unspentOutputs.sumOf { it.amount }
 
                 Result.Success(
-                    CardanoAddressResponse(balance, unspentOutputs, emptyList())
+                    CardanoAddressResponse(balance, unspentOutputs, emptyList()),
                 )
             }
         } catch (exception: Exception) {
@@ -85,7 +82,7 @@ class RosettaNetworkProvider(baseUrl: String) : CardanoNetworkProvider {
             val encodedTransaction = baos.toByteArray()
 
             api.submitTransaction(
-                RosettaSubmitBody(networkIdentifier, encodedTransaction.toHexString())
+                RosettaSubmitBody(networkIdentifier, encodedTransaction.toHexString()),
             )
             SimpleResult.Success
         } catch (exception: Exception) {

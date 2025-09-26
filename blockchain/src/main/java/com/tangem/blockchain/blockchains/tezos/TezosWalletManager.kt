@@ -6,8 +6,11 @@ import com.tangem.blockchain.blockchains.tezos.network.TezosInfoResponse
 import com.tangem.blockchain.blockchains.tezos.network.TezosNetworkProvider
 import com.tangem.blockchain.blockchains.tezos.network.TezosTransactionData
 import com.tangem.blockchain.common.*
+import com.tangem.blockchain.common.transaction.Fee
+import com.tangem.blockchain.common.transaction.TransactionFee
 import com.tangem.blockchain.extensions.Result
 import com.tangem.blockchain.extensions.SimpleResult
+import com.tangem.blockchain.extensions.successOr
 import com.tangem.blockchain.extensions.toCanonicalECDSASignature
 import com.tangem.common.CompletionResult
 import com.tangem.common.card.EllipticCurve
@@ -18,22 +21,22 @@ import kotlinx.coroutines.coroutineScope
 import org.bitcoinj.core.Base58
 import org.bitcoinj.core.Utils
 import java.math.BigDecimal
-import java.util.*
+import java.util.EnumSet
 
 class TezosWalletManager(
     wallet: Wallet,
     private val transactionBuilder: TezosTransactionBuilder,
     private val networkProvider: TezosNetworkProvider,
-    private val curve: EllipticCurve
+    private val curve: EllipticCurve,
 ) : WalletManager(wallet), TransactionSender {
 
     override val currentHost: String
-        get() = networkProvider.host
+        get() = networkProvider.baseUrl
 
     private val blockchain = wallet.blockchain
     private var publicKeyRevealed: Boolean? = null
 
-    override suspend fun update() {
+    override suspend fun updateInternal() {
         when (val response = networkProvider.getInfo(wallet.address)) {
             is Result.Success -> updateWallet(response.data)
             is Result.Failure -> updateError(response.error)
@@ -43,9 +46,10 @@ class TezosWalletManager(
     private fun updateWallet(response: TezosInfoResponse) {
         Log.d(this::class.java.simpleName, "Balance is ${response.balance}")
         if (response.balance != wallet.amounts[AmountType.Coin]?.value) {
+            // assume outgoing transaction has been finalized if balance has changed
             wallet.recentTransactions.clear()
         }
-        wallet.amounts[AmountType.Coin]?.value = response.balance
+        wallet.changeAmountValue(AmountType.Coin, response.balance)
         transactionBuilder.counter = response.counter
     }
 
@@ -54,11 +58,13 @@ class TezosWalletManager(
         if (error is BlockchainSdkError) throw error
     }
 
-    override suspend fun send(
-        transactionData: TransactionData, signer: TransactionSigner
-    ): SimpleResult {
+    override suspend fun send(transactionData: TransactionData, signer: TransactionSigner): SimpleResult {
         if (publicKeyRevealed == null) {
-            return SimpleResult.Failure(BlockchainSdkError.CustomError("publicKeyRevealed is null"))
+            // in case of publicKeyRevealed is null, we should try request it
+            val publicKeyRevealedUpdated = networkProvider.isPublicKeyRevealed(wallet.address)
+            publicKeyRevealed = publicKeyRevealedUpdated.successOr {
+                return SimpleResult.Failure(BlockchainSdkError.CustomError("publicKeyRevealed is null"))
+            }
         }
 
         val contents =
@@ -88,7 +94,7 @@ class TezosWalletManager(
 
         return when (
             val response = networkProvider.checkTransaction(
-                TezosTransactionData(header, contents, encodeSignature(canonicalSignature))
+                TezosTransactionData(header, contents, encodeSignature(canonicalSignature)),
             )
         ) {
             is SimpleResult.Failure -> response
@@ -104,7 +110,7 @@ class TezosWalletManager(
         }
     }
 
-    override suspend fun getFee(amount: Amount, destination: String): Result<List<Amount>> {
+    override suspend fun getFee(amount: Amount, destination: String): Result<TransactionFee> {
         var fee: BigDecimal = BigDecimal.valueOf(TezosConstants.TRANSACTION_FEE)
         var error: Result.Failure? = null
 
@@ -131,7 +137,20 @@ class TezosWalletManager(
                 }
             }
         }
-        return if (error == null) Result.Success(listOf(Amount(fee, blockchain))) else error!!
+
+        return if (error == null) {
+            Result.Success(TransactionFee.Single(Fee.Common(Amount(fee, blockchain))))
+        } else {
+            error!!
+        }
+    }
+
+    override suspend fun estimateFee(amount: Amount, destination: String): Result<TransactionFee> {
+        // we should update publicKeyRevealed on every fee estimation
+        val publicKeyRevealedUpdated = networkProvider.isPublicKeyRevealed(wallet.address)
+        publicKeyRevealed = publicKeyRevealedUpdated.successOr { null }
+        val defaultFee = BigDecimal.valueOf(TezosConstants.TRANSACTION_FEE)
+        return Result.Success(TransactionFee.Single(Fee.Common(Amount(defaultFee, blockchain))))
     }
 
     override fun validateTransaction(amount: Amount, fee: Amount?): EnumSet<TransactionError> {
@@ -143,17 +162,17 @@ class TezosWalletManager(
         return errors
     }
 
+    @Suppress("MagicNumber")
     private fun canonicalizeSignature(signature: ByteArray): ByteArray {
         return when (curve) {
-            EllipticCurve.Ed25519 -> signature
+            EllipticCurve.Ed25519, EllipticCurve.Ed25519Slip0010 -> signature
             EllipticCurve.Secp256k1 -> {
                 val canonicalECDSASignature = signature.toCanonicalECDSASignature()
-                //bigIntegerToBytes cuts leading zero if present
+                // bigIntegerToBytes cuts leading zero if present
                 Utils.bigIntegerToBytes(canonicalECDSASignature.r, 32) +
-                        Utils.bigIntegerToBytes(canonicalECDSASignature.s, 32)
+                    Utils.bigIntegerToBytes(canonicalECDSASignature.s, 32)
             }
             else -> throw java.lang.Exception("This curve ($curve) is not supported")
-
         }
     }
 
