@@ -1,48 +1,45 @@
 package com.tangem.blockchain.blockchains.tron.network
 
+import com.squareup.moshi.JsonDataException
+import com.tangem.blockchain.blockchains.tron.TRON_ENCODED_BYTE_ARRAY_LENGTH
 import com.tangem.blockchain.blockchains.tron.TronAddressService
+import com.tangem.blockchain.common.BlockchainSdkError
+import com.tangem.blockchain.common.NowNodeCredentials
+import com.tangem.blockchain.common.logging.AddHeaderInterceptor
 import com.tangem.blockchain.common.toBlockchainSdkError
 import com.tangem.blockchain.extensions.Result
-import com.tangem.blockchain.extensions.isApiKeyNeeded
-import com.tangem.blockchain.extensions.retryIO
 import com.tangem.blockchain.network.createRetrofitInstance
 import com.tangem.common.extensions.toHexString
-import retrofit2.HttpException
 
-class TronJsonRpcNetworkProvider(
-    override val network: TronNetwork,
-    private val tronGridApiKey: String?
-    ) : TronNetworkProvider {
+class TronJsonRpcNetworkProvider(override val network: TronNetwork) : TronNetworkProvider {
 
-    private var currentApiKey: String? = null
+    override val baseUrl: String = network.url
 
     private val api: TronApi by lazy {
-        createRetrofitInstance(network.url).create(TronApi::class.java)
-    }
-
-    private suspend fun <T> makeRequestUsingKeyOnlyWhenNeeded(
-        block: suspend () -> T
-    ): T {
-        return try {
-            retryIO { block() }
-        } catch (error: HttpException) {
-            if (error.isApiKeyNeeded(currentApiKey, tronGridApiKey)) {
-                currentApiKey = tronGridApiKey
-                retryIO { block() }
-            } else {
-                throw error
+        val headerInterceptors = when (network) {
+            is TronNetwork.TronGrid -> {
+                if (network.apiKey.isNotEmpty()) {
+                    listOf(AddHeaderInterceptor(mapOf(TRON_GRID_API_HEADER_NAME to network.apiKey)))
+                } else {
+                    emptyList()
+                }
             }
+            is TronNetwork.NowNodes -> {
+                if (network.apiKey.isNotEmpty()) {
+                    listOf(AddHeaderInterceptor(mapOf(NowNodeCredentials.headerApiKey to network.apiKey)))
+                } else {
+                    emptyList()
+                }
+            }
+            else -> emptyList()
         }
+
+        createRetrofitInstance(network.url, headerInterceptors).create(TronApi::class.java)
     }
 
     override suspend fun getAccount(address: String): Result<TronGetAccountResponse> {
         return try {
-            val response = makeRequestUsingKeyOnlyWhenNeeded {
-                api.getAccount(
-                    apiKey = currentApiKey,
-                    requestBody = TronGetAccountRequest(address, true)
-                )
-            }
+            val response = api.getAccount(requestBody = TronGetAccountRequest(address, true))
             Result.Success(response)
         } catch (exception: Exception) {
             Result.Failure(exception.toBlockchainSdkError())
@@ -51,14 +48,10 @@ class TronJsonRpcNetworkProvider(
 
     override suspend fun getAccountResource(address: String): Result<TronGetAccountResourceResponse> {
         return try {
-            val response =
-                makeRequestUsingKeyOnlyWhenNeeded {
-                    api.getAccountResource(
-                        apiKey = currentApiKey,
-                        requestBody = TronGetAccountRequest(address, true)
-                    )
-                }
+            val response = api.getAccountResource(requestBody = TronGetAccountRequest(address, true))
             Result.Success(response)
+        } catch (e: JsonDataException) {
+            Result.Failure(BlockchainSdkError.Tron.AccountActivationError(ACCOUNT_ACTIVATION_ERROR_CODE))
         } catch (exception: Exception) {
             Result.Failure(exception.toBlockchainSdkError())
         }
@@ -66,7 +59,7 @@ class TronJsonRpcNetworkProvider(
 
     override suspend fun getNowBlock(): Result<TronBlock> {
         return try {
-            val response = makeRequestUsingKeyOnlyWhenNeeded { api.getNowBlock(currentApiKey) }
+            val response = api.getNowBlock()
             Result.Success(response)
         } catch (exception: Exception) {
             Result.Failure(exception.toBlockchainSdkError())
@@ -75,44 +68,79 @@ class TronJsonRpcNetworkProvider(
 
     override suspend fun broadcastHex(data: ByteArray): Result<TronBroadcastResponse> {
         return try {
-            val response =
-                makeRequestUsingKeyOnlyWhenNeeded {
-                    api.broadcastHex(currentApiKey, TronBroadcastRequest(data.toHexString()))
-                }
+            val response = api.broadcastHex(TronBroadcastRequest(data.toHexString()))
             Result.Success(response)
         } catch (exception: Exception) {
             Result.Failure(exception.toBlockchainSdkError())
         }
     }
 
+    @Suppress("MagicNumber")
     override suspend fun getTokenBalance(
-        address: String,
-        contractAddress: String
+        tokenBalanceRequestData: TokenBalanceRequestData,
     ): Result<TronTriggerSmartContractResponse> {
         return try {
-            val response = makeRequestUsingKeyOnlyWhenNeeded {
-                api.getTokenBalance(
-                    apiKey = currentApiKey,
-                    requestBody = TronTriggerSmartContractRequest(
-                        ownerAddress = address,
-                        contractAddress = contractAddress,
-                        functionSelector = "balanceOf(address)",
-                        parameter = TronAddressService.toHexForm(address, 64) ?: "",
-                        visible = true
-                    ),
-                )
-            }
+            val response = api.triggerConstantContract(
+                requestBody = TronTriggerSmartContractRequest(
+                    ownerAddress = tokenBalanceRequestData.address,
+                    contractAddress = tokenBalanceRequestData.contractAddress,
+                    functionSelector = BALANCE_FUNCTION,
+                    parameter = TronAddressService.toHexForm(
+                        tokenBalanceRequestData.address,
+                        TRON_ENCODED_BYTE_ARRAY_LENGTH,
+                    ) ?: "",
+                    visible = true,
+                ),
+            )
             Result.Success(response)
         } catch (exception: Exception) {
             Result.Failure(exception.toBlockchainSdkError())
         }
     }
 
-    override suspend fun getTokenTransactionHistory(contractAddress: String): Result<TronTokenHistoryResponse> {
+    override suspend fun getAllowance(
+        tokenAllowanceRequestData: TokenAllowanceRequestData,
+    ): Result<TronTriggerSmartContractResponse> {
         return try {
-            val response = makeRequestUsingKeyOnlyWhenNeeded {
-                api.getTokenTransactionHistory(currentApiKey, contractAddress)
-            }
+            val owner = TronAddressService.toHexForm(
+                tokenAllowanceRequestData.ownerAddress,
+                TRON_ENCODED_BYTE_ARRAY_LENGTH,
+            )
+            val spender = TronAddressService.toHexForm(
+                tokenAllowanceRequestData.spenderAddress,
+                TRON_ENCODED_BYTE_ARRAY_LENGTH,
+            )
+            val params = owner + spender
+            val response = api.triggerConstantContract(
+                requestBody = TronTriggerSmartContractRequest(
+                    ownerAddress = tokenAllowanceRequestData.ownerAddress,
+                    contractAddress = tokenAllowanceRequestData.contractAddress,
+                    functionSelector = ALLOWANCE_FUNCTION,
+                    parameter = params,
+                    visible = true,
+                ),
+            )
+            Result.Success(response)
+        } catch (exception: Exception) {
+            Result.Failure(exception.toBlockchainSdkError())
+        }
+    }
+
+    override suspend fun contractEnergyUsage(
+        address: String,
+        contractAddress: String,
+        parameter: String,
+    ): Result<TronTriggerSmartContractResponse> {
+        return try {
+            val response = api.triggerConstantContract(
+                requestBody = TronTriggerSmartContractRequest(
+                    ownerAddress = address,
+                    contractAddress = contractAddress,
+                    functionSelector = TRANSFER_FUNCTION,
+                    parameter = parameter,
+                    visible = true,
+                ),
+            )
             Result.Success(response)
         } catch (exception: Exception) {
             Result.Failure(exception.toBlockchainSdkError())
@@ -121,13 +149,28 @@ class TronJsonRpcNetworkProvider(
 
     override suspend fun getTransactionInfoById(id: String): Result<String> {
         return try {
-            val response =
-                makeRequestUsingKeyOnlyWhenNeeded {
-                    api.getTransactionInfoById(currentApiKey, TronTransactionInfoRequest(id))
-                }
+            val response = api.getTransactionInfoById(TronTransactionInfoRequest(id))
             Result.Success(response.id)
         } catch (exception: Exception) {
             Result.Failure(exception.toBlockchainSdkError())
         }
+    }
+
+    override suspend fun getChainParameters(): Result<TronChainParametersResponse> {
+        return try {
+            val response = api.getChainParameters()
+            Result.Success(response)
+        } catch (exception: Exception) {
+            Result.Failure(exception.toBlockchainSdkError())
+        }
+    }
+
+    private companion object {
+        const val TRON_GRID_API_HEADER_NAME = "TRON-PRO-API-KEY"
+        const val ALLOWANCE_FUNCTION = "allowance(address,address)"
+        const val BALANCE_FUNCTION = "balanceOf(address)"
+        const val TRANSFER_FUNCTION = "transfer(address,uint256)"
+
+        const val ACCOUNT_ACTIVATION_ERROR_CODE = 1
     }
 }

@@ -8,73 +8,117 @@ import java.math.BigDecimal
 data class TronAccountInfo(
     val balance: BigDecimal,
     val tokenBalances: Map<Token, BigDecimal>,
-    val confirmedTransactionIds: List<String>
+    val confirmedTransactionIds: List<String>,
+)
+
+data class TronChainParameters(
+    val sunPerEnergyUnit: Long,
+    val dynamicEnergyMaxFactor: Long,
+    val dynamicIncreaseFactor: Long,
 )
 
 @JsonClass(generateAdapter = true)
 data class TronGetAccountRequest(
+    @Json(name = "address")
     val address: String,
-    val visible: Boolean
+    @Json(name = "visible")
+    val visible: Boolean,
+)
+
+@JsonClass(generateAdapter = true)
+data class TronEnergyFeeData(
+    @Json(name = "energyFee")
+    val energyFee: Long,
+    @Json(name = "sunPerEnergyUnit")
+    val sunPerEnergyUnit: Long,
 )
 
 @JsonClass(generateAdapter = true)
 data class TronGetAccountResponse(
+    @Json(name = "balance")
     val balance: Long?,
     // We use [address] field to distinguish this response from
     // an empty JSON that we get if account hasn't been activated
-    val address: String?
+    @Json(name = "address")
+    val address: String?,
 )
 
 @JsonClass(generateAdapter = true)
 data class TronGetAccountResourceResponse(
-    val freeNetUsed: Int?,
-    val freeNetLimit: Int,
+    @Json(name = "freeNetUsed") val freeNetUsed: Long?,
+    @Json(name = "freeNetLimit") val freeNetLimit: Long,
+    @Json(name = "EnergyLimit") val energyLimit: Long?,
+    @Json(name = "EnergyUsed") val energyUsed: Long?,
 )
 
 @JsonClass(generateAdapter = true)
 data class TronTransactionInfoRequest(
-    val value: String
+    @Json(name = "value")
+    val value: String,
 )
 
 @JsonClass(generateAdapter = true)
 data class TronTransactionInfoResponse(
-    val id: String
+    @Json(name = "id")
+    val id: String,
+)
+
+@JsonClass(generateAdapter = true)
+data class TronChainParametersResponse(
+    @Json(name = "chainParameter")
+    val chainParameters: List<TronChainParameter>,
+)
+
+@JsonClass(generateAdapter = true)
+data class TronChainParameter(
+    @Json(name = "key")
+    val key: String,
+    @Json(name = "value")
+    val value: Long? = null,
 )
 
 @JsonClass(generateAdapter = true)
 data class TronBlock(
     @Json(name = "block_header")
-    val blockHeader: BlockHeader
+    val blockHeader: BlockHeader,
 )
 
 @JsonClass(generateAdapter = true)
 data class BlockHeader(
     @Json(name = "raw_data")
-    val rawData: RawData
+    val rawData: RawData,
 )
 
 @JsonClass(generateAdapter = true)
 data class RawData(
+    @Json(name = "number")
     val number: Long,
+    @Json(name = "txTrieRoot")
     val txTrieRoot: String,
     @Json(name = "witness_address")
     val witnessAddress: String,
+    @Json(name = "parentHash")
     val parentHash: String,
+    @Json(name = "version")
     val version: Int,
+    @Json(name = "timestamp")
     val timestamp: Long,
 )
 
 @JsonClass(generateAdapter = true)
 data class TronBroadcastRequest(
-    val transaction: String
+    @Json(name = "transaction")
+    val transaction: String,
 )
 
 @JsonClass(generateAdapter = true)
 data class TronBroadcastResponse(
+    @Json(name = "result")
     val result: Boolean,
+    @Json(name = "txid")
     val txid: String,
     @Json(name = "message")
-    val errorMessage: String?
+    val errorMessage: String?,
 )
 
 @JsonClass(generateAdapter = true)
@@ -91,24 +135,17 @@ data class TronTriggerSmartContractRequest(
     @Json(name = "fee_limit")
     val feeLimit: Long? = null,
 
+    @Json(name = "parameter")
     val parameter: String,
-    val visible: Boolean
+
+    @Json(name = "visible")
+    val visible: Boolean,
 )
 
 @JsonClass(generateAdapter = true)
 data class TronTriggerSmartContractResponse(
     @Json(name = "constant_result")
-    val constantResult: List<String>
-)
-
-
-@JsonClass(generateAdapter = true)
-data class TokenHistoryData(
-    @Json(name = "energy_usage_total")
-    val energyUsageTotal: Int?
-)
-
-@JsonClass(generateAdapter = true)
-data class TronTokenHistoryResponse(
-    val data: List<TokenHistoryData>
+    val constantResult: List<String>,
+    @Json(name = "energy_used")
+    val energyUsed: Long,
 )

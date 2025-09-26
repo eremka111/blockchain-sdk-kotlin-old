@@ -1,0 +1,63 @@
+name: Create merge release branch
+on:
+  workflow_dispatch:
+
+env:
+  BRANCH_NAME: ${{ github.ref_name }}
+
+jobs:
+  createrelease:
+    name: Create merge release branch
+    runs-on: ubuntu-latest
+    if: ${{ contains(github.ref_name, 'release-app_') }}
+    steps:
+
+      - name: Checkout
+        uses: actions/checkout@v2
+        with:
+          fetch-depth: 0
+
+      - name: Create merge release branch
+        run: git checkout -b merge/${{ env.BRANCH_NAME }}
+
+      - name: Initialize mandatory git config
+        run: |
+          git config user.name "Tangem Bot"
+          git config user.email mobile@tangem.com
+
+      - name: Commit and push changes
+        run: |
+          git add .
+          git commit -m "Merge release branch ${{ env.BRANCH_NAME }} into develop"
+          git fetch origin develop
+          git merge develop
+          git push origin merge/${{ env.BRANCH_NAME }}
+
+      - uses: actions/github-script@v4
+        with:
+          github-token: ${{secrets.GITHUB_TOKEN}}
+          script: |
+            github.pulls.create({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              head: "merge/${{ env.BRANCH_NAME }}",
+              base: "develop",
+              title: "Merge branch ${{ env.BRANCH_NAME }} into develop",
+            });
+
+      - name: Slack notification
+        if: always()
+        uses: adamkdean/simple-slack-notify@master
+        with:
+          channel: '#development-android'
+          status: ${{ job.status }}
+          success_text: 'Blockchain SDK: Merge branch to develop has been created'
+          failure_text: 'Blockchain SDK: Fail to create merge branch'
+          cancelled_text: 'Blockchain SDK: task merge release cancelled'
+          fields: |
+            [{"title": "Source Branch", "value": "${{ steps.extract_branch.outputs.branch }}"},
+            {"title": "Merge Branch", "value": "merge/${{ env.BRANCH_NAME }},
+            {"title": "Initiator", "value": "${{ github.actor }}"},
+            {"title": "Action URL", "value": "${env.GITHUB_SERVER_URL}/${env.GITHUB_REPOSITORY}/actions/runs/${env.GITHUB_RUN_ID}"}]
+        env:
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_DVELOPMENT_ANDROID }}

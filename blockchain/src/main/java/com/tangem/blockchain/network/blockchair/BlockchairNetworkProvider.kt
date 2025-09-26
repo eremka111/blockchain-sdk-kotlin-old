@@ -6,6 +6,7 @@ import com.tangem.blockchain.blockchains.bitcoin.network.BitcoinFee
 import com.tangem.blockchain.blockchains.bitcoin.network.BitcoinNetworkProvider
 import com.tangem.blockchain.common.BasicTransactionData
 import com.tangem.blockchain.common.Blockchain
+import com.tangem.blockchain.common.BlockchainSdkError
 import com.tangem.blockchain.common.toBlockchainSdkError
 import com.tangem.blockchain.extensions.Result
 import com.tangem.blockchain.extensions.SimpleResult
@@ -19,18 +20,19 @@ import retrofit2.HttpException
 import java.math.BigDecimal
 import java.math.RoundingMode
 import java.text.SimpleDateFormat
-import java.util.*
+import java.util.Calendar
+import java.util.Locale
 
 open class BlockchairNetworkProvider(
     blockchain: Blockchain,
     private val apiKey: String? = null,
-    private val authorizationToken: String? = null
+    private val authorizationToken: String? = null,
 ) : BitcoinNetworkProvider {
 
-    override val host: String = createHost(blockchain)
+    override val baseUrl: String = createHost(blockchain)
 
     private val api: BlockchairApi by lazy {
-        createRetrofitInstance(host).create(BlockchairApi::class.java)
+        createRetrofitInstance(baseUrl).create(BlockchairApi::class.java)
     }
 
     private var currentApiKey: String? = null
@@ -44,9 +46,7 @@ open class BlockchairNetworkProvider(
         return api + getPath(blockchain)
     }
 
-    private suspend fun <T> makeRequestUsingKeyOnlyWhenNeeded(
-        block: suspend () -> T
-    ): T {
+    private suspend fun <T> makeRequestUsingKeyOnlyWhenNeeded(block: suspend () -> T): T {
         return try {
             retryIO { block() }
         } catch (error: HttpException) {
@@ -67,7 +67,7 @@ open class BlockchairNetworkProvider(
                     transactionDetails = true,
                     limit = transactionHashesCountLimit,
                     key = apiKey,
-                    authorizationToken = authorizationToken
+                    authorizationToken = authorizationToken,
                 )
             }
 
@@ -75,37 +75,52 @@ open class BlockchairNetworkProvider(
             val addressInfo = addressData.addressInfo!!
             val script = addressInfo.script!!.hexToBytes()
 
-            val unspentOutputs = addressData.unspentOutputs!!.map {
-                BitcoinUnspentOutput(
-                    amount = it.amount!!.toBigDecimal().movePointLeft(decimals),
-                    outputIndex = it.index!!.toLong(),
-                    transactionHash = it.transactionHash!!.hexToBytes(),
-                    outputScript = script
-                )
-            }
+            val unspentOutputs = addressData.unspentOutputs!!
+                .filter {
+                    // Unspents with blockId lower than or equal 1 is not currently available
+                    // This unspents related to transaction in Mempool and are pending. We should ignore this unspents
+                    val block = it.block ?: 0
+                    block > 1
+                }
+                .map {
+                    BitcoinUnspentOutput(
+                        amount = it.amount!!.toBigDecimal().movePointLeft(decimals),
+                        outputIndex = it.index!!.toLong(),
+                        transactionHash = it.transactionHash!!.hexToBytes(),
+                        outputScript = script,
+                    )
+                }
 
             val transactions = addressData.transactions!!.map {
                 BasicTransactionData(
                     balanceDif = it.balanceDif!!.toBigDecimal().movePointLeft(decimals),
                     hash = it.hash!!,
                     isConfirmed = it.block!! != -1,
-                    date = Calendar.getInstance().apply { time = dateFormat.parse(it.time!!)!! }
+                    date = Calendar.getInstance().apply { time = dateFormat.parse(it.time!!)!! },
                 )
+            }
+
+            var balance = BigDecimal.ZERO
+            // confirmed balance calculation
+            transactions.map {
+                if (it.isConfirmed) {
+                    balance = balance.plus(it.balanceDif)
+                }
             }
 
             Result.Success(
                 BitcoinAddressInfo(
-                    balance = addressInfo.balance!!.toBigDecimal().movePointLeft(decimals),
+                    balance = balance,
                     unspentOutputs = unspentOutputs,
-                    recentTransactions = transactions
-                )
+                    recentTransactions = transactions,
+                ),
             )
         } catch (exception: Exception) {
             Result.Failure(exception.toBlockchainSdkError())
         }
-
     }
 
+    @Suppress("MagicNumber")
     override suspend fun getFee(): Result<BitcoinFee> {
         return try {
             val stats = makeRequestUsingKeyOnlyWhenNeeded { api.getBlockchainStats(apiKey, authorizationToken) }
@@ -114,14 +129,14 @@ open class BlockchairNetworkProvider(
                 BitcoinFee(
                     minimalPerKb = (feePerKb * BigDecimal.valueOf(0.8)).setScale(
                         decimals,
-                        RoundingMode.DOWN
+                        RoundingMode.DOWN,
                     ),
                     normalPerKb = feePerKb.setScale(decimals, RoundingMode.DOWN),
                     priorityPerKb = (feePerKb * BigDecimal.valueOf(1.2)).setScale(
                         decimals,
-                        RoundingMode.DOWN
-                    )
-                )
+                        RoundingMode.DOWN,
+                    ),
+                ),
             )
         } catch (exception: Exception) {
             Result.Failure(exception.toBlockchainSdkError())
@@ -130,10 +145,15 @@ open class BlockchairNetworkProvider(
 
     override suspend fun sendTransaction(transaction: String): SimpleResult {
         return try {
-            makeRequestUsingKeyOnlyWhenNeeded {
+            val response = makeRequestUsingKeyOnlyWhenNeeded {
                 api.sendTransaction(BlockchairBody(transaction), apiKey, authorizationToken)
             }
-            SimpleResult.Success
+
+            if (response.transactionData.hash.isNotBlank()) {
+                SimpleResult.Success
+            } else {
+                SimpleResult.Failure(BlockchainSdkError.FailedToSendException)
+            }
         } catch (exception: Exception) {
             SimpleResult.Failure(exception.toBlockchainSdkError())
         }
@@ -145,7 +165,7 @@ open class BlockchairNetworkProvider(
                 api.getAddressData(
                     address = address,
                     key = apiKey,
-                    authorizationToken = authorizationToken
+                    authorizationToken = authorizationToken,
                 )
             }
             val addressInfo = blockchairAddress.data!!.getValue(address).addressInfo!!
@@ -163,7 +183,7 @@ open class BlockchairNetworkProvider(
             Blockchain.Litecoin -> "litecoin/"
             Blockchain.Dogecoin -> "dogecoin/"
             Blockchain.Dash -> "dash/"
-            else -> throw Exception("${blockchain.fullName} blockchain is not supported by ${this::class.simpleName}")
+            else -> error("${blockchain.fullName} blockchain is not supported by ${this::class.simpleName}")
         }
     }
 }

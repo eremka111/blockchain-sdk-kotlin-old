@@ -2,21 +2,24 @@ package com.tangem.blockchain.blockchains.stellar
 
 import android.util.Log
 import com.tangem.blockchain.common.*
+import com.tangem.blockchain.common.transaction.Fee
+import com.tangem.blockchain.common.transaction.TransactionFee
+import com.tangem.blockchain.common.transaction.TransactionSendResult
 import com.tangem.blockchain.extensions.Result
 import com.tangem.blockchain.extensions.SimpleResult
 import com.tangem.blockchain.extensions.successOr
 import com.tangem.common.CompletionResult
 import com.tangem.common.extensions.toHexString
+import java.math.BigDecimal
 
 class StellarWalletManager(
     wallet: Wallet,
     private val transactionBuilder: StellarTransactionBuilder,
     private val networkProvider: StellarNetworkProvider,
-    presetTokens: MutableSet<Token>
-) : WalletManager(wallet, presetTokens), TransactionSender, SignatureCountValidator {
+) : WalletManager(wallet), SignatureCountValidator, ReserveAmountProvider {
 
     override val currentHost: String
-        get() = networkProvider.host
+        get() = networkProvider.baseUrl
 
     private val blockchain = wallet.blockchain
 
@@ -24,7 +27,7 @@ class StellarWalletManager(
     private var baseReserve = BASE_RESERVE
     private var sequence = 0L
 
-    override suspend fun update() {
+    override suspend fun updateInternal() {
         when (val result = networkProvider.getInfo(wallet.address)) {
             is Result.Failure -> updateError(result.error)
             is Result.Success -> updateWallet(result.data)
@@ -42,8 +45,8 @@ class StellarWalletManager(
 
         cardTokens.forEach { token ->
             val tokenBalance = data.tokenBalances
-                    .find { it.symbol == token.symbol && it.issuer == token.contractAddress }?.balance
-                    ?: 0.toBigDecimal()
+                .find { it.symbol == token.symbol && it.issuer == token.contractAddress }?.balance
+                ?: 0.toBigDecimal()
             wallet.addTokenValue(tokenBalance, token)
         }
         // only if no token(s) specified on manager creation or stored on card
@@ -64,39 +67,45 @@ class StellarWalletManager(
         if (error is BlockchainSdkError) throw error
     }
 
-    override suspend fun send(transactionData: TransactionData, signer: TransactionSigner): SimpleResult {
+    override suspend fun send(
+        transactionData: TransactionData,
+        signer: TransactionSigner,
+    ): Result<TransactionSendResult> {
         val hash = transactionBuilder.buildToSign(transactionData, sequence).successOr {
-            return SimpleResult.Failure(it.error)
+            return Result.Failure(it.error)
         }
 
-        val signerResponse = signer.sign(hash, wallet.publicKey)
-        return when (signerResponse) {
+        return when (val signerResponse = signer.sign(hash, wallet.publicKey)) {
             is CompletionResult.Success -> {
                 val transactionToSend = transactionBuilder.buildToSend(signerResponse.data)
-                val sendResult = networkProvider.sendTransaction(transactionToSend)
-
-                if (sendResult is SimpleResult.Success) {
-                    transactionData.hash = transactionBuilder.getTransactionHash().toHexString()
-                    wallet.addOutgoingTransaction(transactionData)
+                when (val sendResult = networkProvider.sendTransaction(transactionToSend)) {
+                    is SimpleResult.Failure -> Result.Failure(sendResult.error)
+                    SimpleResult.Success -> {
+                        val txHash = transactionBuilder.getTransactionHash().toHexString()
+                        transactionData.hash = txHash
+                        wallet.addOutgoingTransaction(transactionData)
+                        Result.Success(TransactionSendResult(txHash))
+                    }
                 }
-                sendResult
             }
-            is CompletionResult.Failure -> SimpleResult.fromTangemSdkError(signerResponse.error)
+            is CompletionResult.Failure -> Result.fromTangemSdkError(signerResponse.error)
         }
     }
 
-    override suspend fun getFee(amount: Amount, destination: String): Result<List<Amount>> {
+    override suspend fun getFee(amount: Amount, destination: String): Result<TransactionFee> {
         val feeStats = networkProvider.getFeeStats().successOr { return it }
 
-        val maxChargedFee = feeStats.feeCharged.max.toBigDecimal().movePointLeft(blockchain.decimals())
-        val minChargedFee = feeStats.feeCharged.min.toBigDecimal().movePointLeft(blockchain.decimals())
-        val averageChargedFee = (maxChargedFee - minChargedFee).divide(2.toBigDecimal()) + minChargedFee
+        val minChargedFee = feeStats.feeCharged.mode.toBigDecimal().movePointLeft(blockchain.decimals())
+        val normalChargedFee = feeStats.feeCharged.p80.toBigDecimal().movePointLeft(blockchain.decimals())
+        val priorityChargedFee = feeStats.feeCharged.p99.toBigDecimal().movePointLeft(blockchain.decimals())
 
-        return Result.Success(listOf(
-            Amount(baseFee, blockchain),
-            Amount(averageChargedFee, blockchain),
-            Amount(maxChargedFee, blockchain),
-        ))
+        return Result.Success(
+            TransactionFee.Choosable(
+                minimum = Fee.Common(Amount(minChargedFee, blockchain)),
+                normal = Fee.Common(Amount(normalChargedFee, blockchain)),
+                priority = Fee.Common(Amount(priorityChargedFee, blockchain)),
+            ),
+        )
     }
 
     override suspend fun validateSignatureCount(signedHashes: Int): SimpleResult {
@@ -110,9 +119,17 @@ class StellarWalletManager(
         }
     }
 
+    override fun getReserveAmount(): BigDecimal = transactionBuilder.minReserve
+
+    override suspend fun isAccountFunded(destinationAddress: String): Boolean {
+        return when (val response = networkProvider.checkTargetAccount(destinationAddress, null)) {
+            is Result.Success -> response.data.accountCreated
+            is Result.Failure -> false
+        }
+    }
+
     companion object {
         val BASE_FEE = 0.00001.toBigDecimal()
         val BASE_RESERVE = 0.5.toBigDecimal()
     }
 }
-

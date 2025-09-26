@@ -1,5 +1,6 @@
 package com.tangem.blockchain.blockchains.stellar
 
+import com.tangem.blockchain.common.NetworkProvider
 import com.tangem.blockchain.common.Token
 import com.tangem.blockchain.common.TransactionData
 import com.tangem.blockchain.extensions.Result
@@ -7,8 +8,7 @@ import com.tangem.blockchain.extensions.SimpleResult
 import org.stellar.sdk.responses.FeeStatsResponse
 import java.math.BigDecimal
 
-interface StellarNetworkProvider {
-    val host: String
+interface StellarNetworkProvider : NetworkProvider {
     suspend fun getInfo(accountId: String): Result<StellarResponse>
     suspend fun getFeeStats(): Result<FeeStatsResponse>
     suspend fun sendTransaction(transaction: String): SimpleResult
@@ -22,17 +22,17 @@ data class StellarResponse(
     val baseFee: BigDecimal,
     val baseReserve: BigDecimal,
     val sequence: Long,
-    val recentTransactions: List<TransactionData>,
-    val subEntryCount: Int
+    val recentTransactions: List<TransactionData.Uncompiled>,
+    val subEntryCount: Int,
 )
 
 data class StellarAssetBalance(
     val balance: BigDecimal,
     val symbol: String,
-    val issuer: String
+    val issuer: String,
 )
 
 data class StellarTargetAccountResponse(
     val accountCreated: Boolean,
-    val trustlineCreated: Boolean? = null
+    val trustlineCreated: Boolean? = null,
 )

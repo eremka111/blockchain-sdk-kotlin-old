@@ -1,34 +1,46 @@
 package com.tangem.blockchain.common
 
+import com.tangem.blockchain.blockchains.aptos.AptosAddressService
 import com.tangem.blockchain.blockchains.binance.BinanceAddressService
 import com.tangem.blockchain.blockchains.bitcoin.BitcoinAddressService
-import com.tangem.blockchain.blockchains.bitcoin.BitcoinAddressType
 import com.tangem.blockchain.blockchains.bitcoincash.BitcoinCashAddressService
-import com.tangem.blockchain.blockchains.cardano.CardanoAddressService
-import com.tangem.blockchain.blockchains.cardano.CardanoAddressType
+import com.tangem.blockchain.blockchains.cardano.CardanoAddressServiceFacade
+import com.tangem.blockchain.blockchains.casper.CasperAddressService
+import com.tangem.blockchain.blockchains.chia.ChiaAddressService
+import com.tangem.blockchain.blockchains.decimal.DecimalAddressService
 import com.tangem.blockchain.blockchains.ethereum.Chain
 import com.tangem.blockchain.blockchains.ethereum.EthereumAddressService
+import com.tangem.blockchain.blockchains.factorn.Fact0rnAddressService
+import com.tangem.blockchain.blockchains.hedera.HederaAddressService
+import com.tangem.blockchain.blockchains.kaspa.KaspaAddressService
+import com.tangem.blockchain.blockchains.koinos.KoinosAddressService
+import com.tangem.blockchain.blockchains.nexa.NexaAddressService
 import com.tangem.blockchain.blockchains.polkadot.PolkadotAddressService
+import com.tangem.blockchain.blockchains.radiant.RadiantAddressService
 import com.tangem.blockchain.blockchains.rsk.RskAddressService
 import com.tangem.blockchain.blockchains.solana.SolanaAddressService
 import com.tangem.blockchain.blockchains.stellar.StellarAddressService
 import com.tangem.blockchain.blockchains.tezos.TezosAddressService
 import com.tangem.blockchain.blockchains.tron.TronAddressService
+import com.tangem.blockchain.blockchains.vechain.VeChainWalletManager
+import com.tangem.blockchain.blockchains.xdc.XDCAddressService
 import com.tangem.blockchain.blockchains.xrp.XrpAddressService
 import com.tangem.blockchain.common.address.*
+import com.tangem.blockchain.common.derivation.DerivationStyle
+import com.tangem.blockchain.externallinkprovider.ExternalLinkProvider
+import com.tangem.blockchain.externallinkprovider.ExternalLinkProviderFactory
+import com.tangem.blockchain.externallinkprovider.TxExploreState
 import com.tangem.common.card.EllipticCurve
-import com.tangem.common.hdWallet.DerivationNode
-import com.tangem.common.hdWallet.DerivationPath
-import com.tangem.common.hdWallet.bip.BIP44
+import com.tangem.crypto.hdWallet.DerivationPath
 
-
+@Suppress("LargeClass", "TooManyFunctions")
 enum class Blockchain(
     val id: String,
     val currency: String,
     val fullName: String,
 ) {
     Unknown("", "", ""),
-    Arbitrum("ARBITRUM-ONE", "ETH", "Arbitrum"),
+    Arbitrum("ARBITRUM-ONE", "ETH", "Arbitrum One (ETH)"),
     ArbitrumTestnet("ARBITRUM/test", "ETH", "Arbitrum Testnet"),
     Avalanche("AVALANCHE", "AVAX", "Avalanche C-Chain"),
     AvalancheTestnet("AVALANCHE/test", "AVAX", "Avalanche C-Chain Testnet"),
@@ -40,8 +52,9 @@ enum class Blockchain(
     BitcoinTestnet("BTC/test", "BTC", "Bitcoin Testnet"),
     BitcoinCash("BCH", "BCH", "Bitcoin Cash"),
     BitcoinCashTestnet("BCH/test", "BCH", "Bitcoin Cash Testnet"),
-    Cardano("CARDANO", "ADA", "Cardano"),
-    CardanoShelley("CARDANO-S", "ADA", "Cardano"),
+    Cardano("CARDANO-S", "ADA", "Cardano"),
+    Cosmos("cosmos", "ATOM", "Cosmos"),
+    CosmosTestnet("cosmos/test", "ATOM", "Cosmos Testnet"),
     Dogecoin("DOGE", "DOGE", "Dogecoin"),
     Ducatus("DUC", "DUC", "Ducatus"),
     Ethereum("ETH", "ETH", "Ethereum"),
@@ -51,12 +64,18 @@ enum class Blockchain(
     Fantom("FTM", "FTM", "Fantom"),
     FantomTestnet("FTM/test", "FTM", "Fantom Testnet"),
     Litecoin("LTC", "LTC", "Litecoin"),
+    Near("NEAR", "NEAR", "NEAR Protocol"),
+    NearTestnet("NEAR/test", "NEAR", "NEAR Protocol Testnet"),
     Polkadot("Polkadot", "DOT", "Polkadot"),
-    PolkadotTestnet("Polkadot", "WND", "Polkadot Westend Testnet"),
+    PolkadotTestnet("Polkadot", "WND", "Polkadot Western Testnet"),
+    Kava("KAVA", "KAVA", "Kava EVM"),
+    KavaTestnet("KAVA/test", "KAVA", "Kava EVM Testnet"),
     Kusama("Kusama", "KSM", "Kusama"),
-    Polygon("POLYGON", "MATIC", "Polygon"),
-    PolygonTestnet("POLYGON/test", "MATIC", "Polygon Testnet"),
+    Polygon("POLYGON", "POL", "Polygon"),
+    PolygonTestnet("POLYGON/test", "POL", "Polygon Testnet"),
     RSK("RSK", "RBTC", "RSK"),
+    Sei("sei", "SEI", "Sei"),
+    SeiTestnet("sei/test", "SEI", "Sei Testnet"),
     Stellar("XLM", "XLM", "Stellar"),
     StellarTestnet("XLM/test", "XLM", "Stellar Testnet"),
     Solana("SOLANA", "SOL", "Solana"),
@@ -67,32 +86,169 @@ enum class Blockchain(
     XRP("XRP", "XRP", "XRP Ledger"),
     Gnosis("GNO", "xDAI", "Gnosis Chain"),
     Dash("DASH", "DASH", "Dash"),
-    Optimism("OPTIMISM", "ETH", "Optimistic Ethereum"),
+    Optimism("OPTIMISM", "ETH", "Optimistic Ethereum (ETH)"),
     OptimismTestnet("OPTIMISM", "ETH", "Optimistic Ethereum Testnet"),
-    EthereumFair("ETH-Fair", "ETF", "EthereumFair"),
+    Dischain("dischain", "DIS", "DisChain (ETHF)"),
     EthereumPow("ETH-Pow", "ETHW", "EthereumPoW"),
-    EthereumPowTestnet("ETH-Pow/test", "ETHW", "EthereumPoW"),
-    SaltPay("WXDAI", "WxDAI", "SaltPay"),
-    SaltPayTestnet("WXDAI", "WxDAI", "SaltPay Testnet"),
+    EthereumPowTestnet("ETH-Pow/test", "ETHW", "EthereumPoW Testnet"),
+    Kaspa("KAS", "KAS", "Kaspa"),
+    Telos("TELOS", "TLOS", "Telos EVM"),
+    TelosTestnet("TELOS/test", "TLOS", "Telos Testnet"),
+    TON("The-Open-Network", "TON", "Toncoin"),
+    TONTestnet("The-Open-Network/test", "TON", "Ton Testnet"),
+    Ravencoin("ravencoin", "RVN", "Ravencoin"),
+    RavencoinTestnet("ravencoin/test", "RVN", "Ravencoin Testnet"),
+    TerraV1("terra", "LUNC", "Terra Classic"),
+    TerraV2("terra-2", "LUNA", "Terra"),
+    Cronos("cronos", "CRO", "Cronos EVM"),
+    AlephZero("aleph-zero", "AZERO", "Aleph Zero"),
+    AlephZeroTestnet("aleph-zero/test", "TZERO", "Aleph Zero Testnet"),
+    OctaSpace("octaspace", "OCTA", "OctaSpace"),
+    OctaSpaceTestnet("octaspace/test", "OCTA", "OctaSpace Testnet"),
+    Chia("chia", "XCH", "Chia Network"),
+    ChiaTestnet("chia/test", "TXCH", "Chia Network Testnet"),
+    Decimal("decimal", "DEL", "Decimal Smart Chain"),
+    DecimalTestnet("decimal/test", "tDEL", "Decimal Smart Chain Testnet"),
+    XDC("xdc", "XDC", "XDC Network"),
+    XDCTestnet("xdc/test", "XDC", "XDC Network Testnet"),
+    VeChain("vechain", "VET", "VeChain"),
+    VeChainTestnet("vechain/test", "VET", "VeChain Testnet"),
+    Aptos("aptos", "APT", "Aptos"),
+    AptosTestnet("aptos/test", "APT", "Aptos Testnet"),
+    Playa3ull("playa3ull", "3ULL", "PLAYA3ULL GAMES"),
+    Shibarium("shibarium", "BONE", "Shibarium"),
+    ShibariumTestnet("shibarium/test", "BONE", "Shibarium Testnet"),
+    Algorand("algorand", "ALGO", "Algorand"),
+    AlgorandTestnet("algorand/test", "ALGO", "Algorand Testnet"),
+    Hedera("hedera", "HBAR", "Hedera"),
+    HederaTestnet("hedera/test", "HBAR", "Hedera Testnet"),
+    Aurora("aurora", "ETH", "Aurora (ETH)"),
+    AuroraTestnet("aurora/test", "ETH", "Aurora Testnet"),
+    Areon("areon", "AREA", "Areon Network"),
+    AreonTestnet("areon/test", "TAREA", "Areon Network Testnet"),
+    PulseChain("pls", "PLS", "PulseChain"),
+    PulseChainTestnet("pls/test", "tPLS", "PulseChain Testnet v4"),
+    ZkSyncEra("zkSyncEra", "ETH", "ZkSync Era (ETH)"),
+    ZkSyncEraTestnet("zkSyncEra/test", "ETH", "ZkSync Era Testnet"),
+    Nexa("NEXA", "NEXA", "Nexa"),
+    NexaTestnet("NEXA/test", "NEXA", "Nexa Testnet"),
+    Moonbeam("moonbeam", "GLMR", "Moonbeam"),
+    MoonbeamTestnet("moonbeam/test", "GLMR", "Moonbeam Testnet"),
+    Manta("manta-pacific", "ETH", "Manta Pacific (ETH)"),
+    MantaTestnet("manta/test", "ETH", "Manta Testnet"),
+    PolygonZkEVM("polygonZkEVM", "ETH", "Polygon zkEVM (ETH)"),
+    PolygonZkEVMTestnet("polygonZkEVM/test", "ETH", "Polygon zkEVM Testnet"),
+    Radiant("radiant", "RXD", "Radiant"),
+    Base("base", "ETH", "Base (ETH)"),
+    BaseTestnet("base/test", "ETH", "Base Testnet"),
+    Moonriver("moonriver", "MOVR", "Moonriver"),
+    MoonriverTestnet("moonriver/test", "MOVR", "Moonriver Testnet"),
+    Mantle("mantle", "MNT", "Mantle"),
+    MantleTestnet("mantle/test", "MNT", "Mantle Testnet"),
+    Fact0rn("fact0rn", "FACT", "Fact0rn"),
+    Flare("flare", "FLR", "Flare"),
+    FlareTestnet("flare/test", "FLR", "Flare Testnet"),
+    Taraxa("taraxa", "TARA", "Taraxa"),
+    TaraxaTestnet("taraxa/test", "TARA", "Taraxa Testnet"),
+    Koinos("koinos", "KOIN", "Koinos"),
+    KoinosTestnet("koinos/test", "tKOIN", "Koinos Testnet"),
+    Joystream("joystream", "JOY", "Joystream"),
+    Bittensor("bittensor", "TAO", "Bittensor"),
+    Filecoin("filecoin", "FIL", "Filecoin"),
+    Blast("blast", "ETH", "Blast (ETH)"),
+    BlastTestnet("blast/test", "ETH", "Blast Testnet"),
+    Cyber("cyber", "ETH", "Cyber (ETH)"),
+    CyberTestnet("cyber/test", "ETH", "Cyber Testnet"),
+    InternetComputer("internet-computer", "ICP", "Internet Computer"),
+    Sui("sui", "SUI", "Sui"),
+    SuiTestnet("sui/test", "SUI", "Sui Testnet"),
+    EnergyWebChain("energy-web-chain", "EWT", "Energy Web Chain"),
+    EnergyWebChainTestnet("energy-web-chain/test", "VT", "Energy Web Chain Volta Testnet"),
+    EnergyWebX("energy-web-x", "EWT", "Energy Web X"),
+    EnergyWebXTestnet("energy-web-x/test", "VT", "Energy Web X Paseo Testnet"),
+    Casper("casper", "CSPR", "Casper"),
+    CasperTestnet("casper/test", "CSPR", "Casper Testnet"),
+    Core("core", "CORE", "Core"),
+    CoreTestnet("core/test", "tCORE", "Core Testnet"),
+    Xodex("xodex", "XODEX", "Xodex"),
+    Canxium("canxium", "CAU", "Canxium"),
+    Chiliz("chiliz", "CHZ", "Chiliz"),
+    ChilizTestnet("chiliz/test", "CHZ", "Chiliz Spicy Testnet"),
+    Clore("clore-ai", "CLORE", "Clore"),
+    VanarChain("vanar-chain", "VANRY", "Vanar Chain"),
+    VanarChainTestnet("vanar-chain/test", "VG", "Vanar Vanguard Testnet"),
+    OdysseyChain("odyssey", "DIONE", "Dione"),
+    OdysseyChainTestnet("odyssey/test", "DIONE", "Dione Testnet"),
+    Bitrock("bitrock", "BROCK", "Bitrock"),
+    BitrockTestnet("bitrock/test", "BROCK", "Bitrock Testnet"),
+    Sonic("sonic", "S", "Sonic"),
+    SonicTestnet("sonic/test", "S", "Sonic Blaze Testnet"),
+    ApeChain("apechain", "APE", "ApeCoin"),
+    ApeChainTestnet("apechain/test", "APE", "Curtis Testnet"),
     ;
 
+    private val externalLinkProvider: ExternalLinkProvider by lazy { ExternalLinkProviderFactory.makeProvider(this) }
+
+    fun getNetworkName(): String {
+        return when (this) {
+            TON -> "TON"
+            OdysseyChain -> "Odyssey Chain"
+            OdysseyChainTestnet -> "Odyssey Chain Testnet"
+            ApeChain -> "ApeChain"
+            else -> this.fullName
+        }
+    }
+
+    @Suppress("MagicNumber", "LongMethod")
     fun decimals(): Int = when (this) {
         Unknown -> 0
-        Cardano, CardanoShelley,
+
+        Nexa, NexaTestnet,
+        -> 2
+
+        Cardano,
         XRP,
         Tezos,
-        Tron, TronTestnet -> 6
+        Tron, TronTestnet,
+        Cosmos, CosmosTestnet,
+        TerraV1, TerraV2,
+        Algorand, AlgorandTestnet,
+        Sei, SeiTestnet,
+        -> 6
+
         Stellar, StellarTestnet -> 7
+
         Bitcoin, BitcoinTestnet,
         BitcoinCash, BitcoinCashTestnet,
         Binance, BinanceTestnet,
         Litecoin,
         Ducatus,
         Dogecoin,
-        Dash -> 8
-        Solana, SolanaTestnet -> 9
-        Polkadot -> 10
-        PolkadotTestnet, Kusama -> 12
+        Dash,
+        Kaspa,
+        Ravencoin, RavencoinTestnet,
+        Aptos, AptosTestnet,
+        Hedera, HederaTestnet,
+        Radiant,
+        Fact0rn,
+        Koinos, KoinosTestnet,
+        InternetComputer,
+        Clore,
+        -> 8
+
+        Solana, SolanaTestnet,
+        TON, TONTestnet,
+        Bittensor,
+        Sui, SuiTestnet,
+        Casper, CasperTestnet,
+        -> 9
+
+        Polkadot, Joystream -> 10
+
+        PolkadotTestnet, Kusama, AlephZero, AlephZeroTestnet,
+        Chia, ChiaTestnet,
+        -> 12
+
         Arbitrum, ArbitrumTestnet,
         Ethereum, EthereumTestnet,
         EthereumClassic, EthereumClassicTestnet,
@@ -103,8 +259,46 @@ enum class Blockchain(
         Fantom, FantomTestnet,
         Gnosis,
         Optimism, OptimismTestnet,
-        EthereumFair, EthereumPow, EthereumPowTestnet,
-        SaltPay, SaltPayTestnet -> 18
+        Dischain, EthereumPow, EthereumPowTestnet,
+        Kava, KavaTestnet,
+        Cronos,
+        Telos, TelosTestnet,
+        OctaSpace, OctaSpaceTestnet,
+        Decimal, DecimalTestnet,
+        XDC, XDCTestnet,
+        VeChain, VeChainTestnet,
+        Playa3ull,
+        Shibarium, ShibariumTestnet,
+        Aurora, AuroraTestnet,
+        Areon, AreonTestnet,
+        PulseChain, PulseChainTestnet,
+        ZkSyncEra, ZkSyncEraTestnet,
+        Moonbeam, MoonbeamTestnet,
+        Manta, MantaTestnet,
+        PolygonZkEVM, PolygonZkEVMTestnet,
+        Base, BaseTestnet,
+        Moonriver, MoonriverTestnet,
+        Mantle, MantleTestnet,
+        Flare, FlareTestnet,
+        Taraxa, TaraxaTestnet,
+        Filecoin,
+        Blast, BlastTestnet,
+        Cyber, CyberTestnet,
+        EnergyWebChain, EnergyWebChainTestnet,
+        EnergyWebX, EnergyWebXTestnet,
+        Core, CoreTestnet,
+        Chiliz, ChilizTestnet,
+        VanarChain, VanarChainTestnet,
+        Xodex,
+        Canxium,
+        OdysseyChain, OdysseyChainTestnet,
+        Bitrock, BitrockTestnet,
+        Sonic, SonicTestnet,
+        ApeChain, ApeChainTestnet,
+        -> 18
+
+        Near, NearTestnet,
+        -> 24
     }
 
     fun makeAddresses(
@@ -112,145 +306,151 @@ enum class Blockchain(
         pairPublicKey: ByteArray? = null,
         curve: EllipticCurve = EllipticCurve.Secp256k1,
     ): Set<Address> {
+        val addressService = getAddressService()
         return if (pairPublicKey != null) {
-            (getAddressService() as? MultisigAddressProvider)
+            (addressService as? MultisigAddressProvider)
                 ?.makeMultisigAddresses(walletPublicKey, pairPublicKey) ?: emptySet()
         } else {
-            getAddressService().makeAddresses(walletPublicKey, curve)
+            addressService.makeAddresses(walletPublicKey, curve)
         }
     }
 
     fun validateAddress(address: String): Boolean = getAddressService().validate(address)
 
-    private fun getAddressService(): AddressService = when (this) {
-        Bitcoin, BitcoinTestnet, Litecoin, Dogecoin, Ducatus, Dash -> BitcoinAddressService(this)
-        BitcoinCash, BitcoinCashTestnet -> BitcoinCashAddressService()
-        Arbitrum, ArbitrumTestnet,
-        Ethereum, EthereumTestnet, EthereumClassic, EthereumClassicTestnet,
-        BSC, BSCTestnet, Polygon, PolygonTestnet, Avalanche, AvalancheTestnet,
-        Fantom, FantomTestnet, Gnosis, Optimism, OptimismTestnet,
-        EthereumFair, EthereumPow, EthereumPowTestnet, SaltPay, SaltPayTestnet -> EthereumAddressService()
-        RSK -> RskAddressService()
-        Cardano, CardanoShelley -> CardanoAddressService(this)
-        XRP -> XrpAddressService()
-        Binance -> BinanceAddressService()
-        BinanceTestnet -> BinanceAddressService(true)
-        Polkadot, PolkadotTestnet, Kusama -> PolkadotAddressService(this)
-        Stellar, StellarTestnet -> StellarAddressService()
-        Solana, SolanaTestnet -> SolanaAddressService()
-        Tezos -> TezosAddressService()
-        Tron, TronTestnet -> TronAddressService()
-        Unknown -> throw Exception("unsupported blockchain")
+    fun validateContractAddress(address: String): Boolean {
+        return (getAddressService() as? ContractAddressValidator)?.validateContractAddress(address) == true
     }
 
-    fun getShareScheme(): String? = when (this) {
-        Bitcoin -> "bitcoin"
-        Ethereum -> "ethereum"
-        Litecoin -> "litecoin"
-        Binance -> "bnb"
-        else -> null
+    @Suppress("CyclomaticComplexMethod", "LongMethod")
+    private fun getAddressService(): AddressService {
+        return when (this) {
+            Bitcoin, BitcoinTestnet,
+            Litecoin,
+            Dogecoin,
+            Ducatus,
+            Dash,
+            Ravencoin, RavencoinTestnet,
+            Clore,
+            -> BitcoinAddressService(this)
+
+            BitcoinCash, BitcoinCashTestnet -> BitcoinCashAddressService(this)
+            Arbitrum, ArbitrumTestnet,
+            Ethereum, EthereumTestnet,
+            EthereumClassic, EthereumClassicTestnet,
+            BSC, BSCTestnet,
+            Polygon, PolygonTestnet,
+            Avalanche, AvalancheTestnet,
+            Fantom, FantomTestnet,
+            Gnosis,
+            Optimism, OptimismTestnet,
+            Dischain,
+            EthereumPow, EthereumPowTestnet,
+            Kava, KavaTestnet,
+            Cronos,
+            Telos, TelosTestnet,
+            OctaSpace, OctaSpaceTestnet,
+            VeChain, VeChainTestnet,
+            Playa3ull,
+            Shibarium, ShibariumTestnet,
+            Aurora, AuroraTestnet,
+            Areon, AreonTestnet,
+            PulseChain, PulseChainTestnet,
+            ZkSyncEra, ZkSyncEraTestnet,
+            Moonbeam, MoonbeamTestnet,
+            Manta, MantaTestnet,
+            PolygonZkEVM, PolygonZkEVMTestnet,
+            Base, BaseTestnet,
+            Moonriver, MoonriverTestnet,
+            Mantle, MantleTestnet,
+            Flare, FlareTestnet,
+            Taraxa, TaraxaTestnet,
+            Blast, BlastTestnet,
+            Cyber, CyberTestnet,
+            EnergyWebChain, EnergyWebChainTestnet,
+            Core, CoreTestnet,
+            Chiliz, ChilizTestnet,
+            VanarChain, VanarChainTestnet,
+            Xodex,
+            Canxium,
+            OdysseyChain, OdysseyChainTestnet,
+            Bitrock, BitrockTestnet,
+            Sonic, SonicTestnet,
+            ApeChain, ApeChainTestnet,
+            -> EthereumAddressService()
+
+            XDC, XDCTestnet -> XDCAddressService()
+
+            Decimal, DecimalTestnet -> DecimalAddressService()
+            RSK -> RskAddressService()
+            Cardano -> CardanoAddressServiceFacade()
+            XRP -> XrpAddressService()
+            Binance -> BinanceAddressService()
+            BinanceTestnet -> BinanceAddressService(true)
+            Polkadot, PolkadotTestnet,
+            Kusama,
+            AlephZero, AlephZeroTestnet,
+            Joystream,
+            Bittensor,
+            EnergyWebX, EnergyWebXTestnet,
+            -> PolkadotAddressService(this)
+            Stellar, StellarTestnet -> StellarAddressService()
+            Solana, SolanaTestnet -> SolanaAddressService()
+            Tezos -> TezosAddressService()
+            Cosmos, CosmosTestnet,
+            TerraV1,
+            TerraV2,
+            Near, NearTestnet,
+            Algorand, AlgorandTestnet,
+            InternetComputer,
+            Filecoin,
+            Sei, SeiTestnet,
+            Sui, SuiTestnet,
+            TON, TONTestnet,
+            -> WalletCoreAddressService(blockchain = this)
+
+            Aptos, AptosTestnet -> AptosAddressService(isTestnet())
+            Tron, TronTestnet -> TronAddressService()
+            Kaspa -> KaspaAddressService()
+            Chia, ChiaTestnet -> ChiaAddressService(this)
+            Hedera, HederaTestnet -> HederaAddressService(this.isTestnet())
+            Nexa, NexaTestnet -> NexaAddressService(this.isTestnet())
+            Koinos, KoinosTestnet -> KoinosAddressService()
+            Radiant -> RadiantAddressService()
+            Fact0rn -> Fact0rnAddressService()
+            Casper, CasperTestnet -> CasperAddressService()
+            Unknown -> error("unsupported blockchain")
+        }
     }
 
-    fun getShareUri(address: String): String = getShareScheme()?.plus(":$address") ?: address
-
-    fun validateShareScheme(scheme: String): Boolean {
-        if (this == XRP && (scheme == "ripple" || scheme == "xrpl" || scheme == "xrp")) return true
-        return scheme == getShareScheme()
+    fun getShareScheme(): List<String> = when (this) {
+        Bitcoin, BitcoinTestnet -> listOf("bitcoin:")
+        Ethereum, EthereumTestnet -> listOf("ethereum:", "ethereum:pay-") // "pay-" defined in ERC-681
+        Litecoin -> listOf("litecoin:")
+        Binance, BinanceTestnet -> listOf("bnb:")
+        Dogecoin -> listOf("doge:", "dogecoin:")
+        XRP -> listOf("ripple:", "xrpl:", "xrp:")
+        else -> emptyList()
     }
 
-    fun getExploreUrl(address: String, tokenContractAddress: String? = null): String = when (this) {
-        Arbitrum -> "https://arbiscan.io/address/$address"
-        ArbitrumTestnet -> "https://testnet.arbiscan.io/address/$address"
-        Avalanche -> "https://snowtrace.io/address/$address"
-        AvalancheTestnet -> "https://testnet.snowtrace.io/address/$address"
-        Binance -> "https://explorer.binance.org/address/$address"
-        BinanceTestnet -> "https://testnet-explorer.binance.org/address/$address"
-        Bitcoin -> "https://www.blockchair.com/bitcoin/address/$address"
-        BitcoinTestnet -> "https://www.blockchair.com/bitcoin/testnet/address/$address"
-        BitcoinCash -> "https://www.blockchair.com/bitcoin-cash/address/$address"
-        BitcoinCashTestnet -> "https://www.blockchain.com/bch-testnet/address/$address"
-        BSC -> "https://bscscan.com/address/$address"
-        BSCTestnet -> "https://testnet.bscscan.com/address/$address"
-        Cardano, CardanoShelley -> "https://explorer.cardano.org/en/address.html?address=$address"
-        Dogecoin -> "https://blockchair.com/dogecoin/address/$address"
-        Ducatus -> "https://insight.ducatus.io/#/DUC/mainnet/address/$address"
-        Ethereum -> if (tokenContractAddress == null) {
-            "https://etherscan.io/address/$address"
-        } else {
-            "https://etherscan.io/token/$tokenContractAddress?a=$address"
-        }
-        EthereumTestnet -> if (tokenContractAddress == null) {
-            "https://rinkeby.etherscan.io/address/$address"
-        } else {
-            "https://rinkeby.etherscan.io/token/$tokenContractAddress?a=$address"
-        }
-        EthereumClassic -> "https://blockscout.com/etc/mainnet/address/$address/transactions"
-        EthereumClassicTestnet -> "https://blockscout.com/etc/kotti/address/$address/transactions"
-        Fantom -> "https://ftmscan.com/address/$address"
-        FantomTestnet -> "https://testnet.ftmscan.com/address/$address"
-        Litecoin -> "https://blockchair.com/litecoin/address/$address"
-        Polkadot -> "https://polkadot.subscan.io/account/$address"
-        PolkadotTestnet -> "https://westend.subscan.io/account/$address"
-        Kusama -> "https://kusama.subscan.io/account/$address"
-        Polygon -> "https://polygonscan.com/address/$address"
-        PolygonTestnet -> "https://explorer-mumbai.maticvigil.com/address/$address"
-        RSK -> {
-            var url = "https://explorer.rsk.co/address/$address"
-            if (tokenContractAddress != null) {
-                url += "?__tab=tokens"
-            }
-            url
-        }
-        Stellar -> "https://stellar.expert/explorer/public/account/$address"
-        StellarTestnet -> "https://stellar.expert/explorer/testnet/account/$address"
-        Solana -> "https://explorer.solana.com/address/$address"
-        SolanaTestnet -> "https://explorer.solana.com/address/$address/?cluster=devnet"
-        Tezos -> "https://tezblock.io/account/$address"
-        Tron -> "https://tronscan.org/#/address/$address"
-        TronTestnet -> "https://nile.tronscan.org/#/address/$address"
-        XRP -> "https://xrpscan.com/account/$address"
-        Gnosis -> "https://blockscout.com/xdai/mainnet/address/$address"
-        Dash -> "https://blockexplorer.one/dash/mainnet/address/$address"
-        Optimism -> "https://optimistic.etherscan.io/address/$address"
-        OptimismTestnet -> "https://blockscout.com/optimism/goerli/address/$address"
-        EthereumFair -> "https://explorer.etherfair.org/address/$address"
-        EthereumPow -> "https://mainnet.ethwscan.com/address/$address"
-        EthereumPowTestnet -> "https://iceberg.ethwscan.com/address/$address"
-        SaltPay -> "https://blockscout.com/xdai/optimism/address/$address"
-        SaltPayTestnet -> "https://blockscout-chiado.gnosistestnet.com/address/$address"
-        Unknown -> throw Exception("unsupported blockchain")
+    fun getShareUri(address: String): String = getShareScheme().firstOrNull()?.plus(address) ?: address
+
+    fun validateShareScheme(scheme: String) = getShareScheme().any { it == "$scheme:" }
+
+    fun getExploreUrl(address: String, tokenContractAddress: String? = null): String {
+        return externalLinkProvider.explorerUrl(walletAddress = address, contractAddress = tokenContractAddress)
+    }
+
+    fun getExploreTxUrl(transactionHash: String): TxExploreState {
+        return externalLinkProvider.getExplorerTxUrl(transactionHash)
     }
 
     fun getTestnetTopUpUrl(): String? {
-        return when (this) {
-            AvalancheTestnet -> "https://faucet.avax-test.network/"
-            BitcoinTestnet -> "https://coinfaucet.eu/en/btc-testnet/"
-            EthereumTestnet -> "https://faucet.rinkeby.io"
-            EthereumClassicTestnet -> "https://kottifaucet.me"
-            BitcoinCashTestnet -> "https://coinfaucet.eu/en/bch-testnet/"
-            BinanceTestnet -> "https://docs.binance.org/smart-chain/wallet/binance.html"
-            BSCTestnet -> "https://testnet.binance.org/faucet-smart"
-            FantomTestnet -> "https://faucet.fantom.network"
-            PolygonTestnet -> "https://faucet.matic.network"
-            PolkadotTestnet -> "https://app.element.io/#/room/#westend_faucet:matrix.org"
-            StellarTestnet -> "https://laboratory.stellar.org/#account-creator?network=test"
-            SolanaTestnet -> "https://solfaucet.com/"
-            TronTestnet -> "https://nileex.io/join/getJoinPage"
-            OptimismTestnet -> "https://optimismfaucet.xyz" //another one https://faucet.paradigm.xyz
-            EthereumPowTestnet -> "https://faucet.ethwscan.com"
-            SaltPayTestnet -> "https://gnosisfaucet.com"
-            else -> null
-        }
-    }
-
-    fun defaultAddressType(): AddressType = when (this) {
-        Bitcoin, BitcoinTestnet, Litecoin -> BitcoinAddressType.Segwit
-        CardanoShelley -> CardanoAddressType.Shelley
-        else -> DefaultAddressType
+        return externalLinkProvider.testNetTopUpUrl
     }
 
     fun isTestnet(): Boolean = this == getTestnetVersion()
 
+    @Suppress("CyclomaticComplexMethod")
     fun getTestnetVersion(): Blockchain? {
         return when (this) {
             Avalanche, AvalancheTestnet -> AvalancheTestnet
@@ -269,21 +469,74 @@ enum class Blockchain(
             Tron, TronTestnet -> TronTestnet
             Optimism, OptimismTestnet -> OptimismTestnet
             EthereumPow, EthereumPowTestnet -> EthereumPowTestnet
-            SaltPay, SaltPayTestnet -> SaltPayTestnet
+            TON, TONTestnet -> TONTestnet
+            Kava, KavaTestnet -> KavaTestnet
+            Telos, TelosTestnet -> TelosTestnet
+            Ravencoin, RavencoinTestnet -> RavencoinTestnet
+            Cosmos, CosmosTestnet -> CosmosTestnet
+            AlephZero, AlephZeroTestnet -> AlephZeroTestnet
+            OctaSpace, OctaSpaceTestnet -> OctaSpaceTestnet
+            Chia, ChiaTestnet -> ChiaTestnet
+            Near, NearTestnet -> NearTestnet
+            Decimal, DecimalTestnet -> DecimalTestnet
+            XDC, XDCTestnet -> XDCTestnet
+            VeChain, VeChainTestnet -> VeChainTestnet
+            Aptos, AptosTestnet -> AptosTestnet
+            Shibarium, ShibariumTestnet -> ShibariumTestnet
+            Algorand, AlgorandTestnet -> AlgorandTestnet
+            Hedera, HederaTestnet -> HederaTestnet
+            Aurora, AuroraTestnet -> AuroraTestnet
+            Areon, AreonTestnet -> AreonTestnet
+            PulseChain, PulseChainTestnet -> PulseChainTestnet
+            ZkSyncEra, ZkSyncEraTestnet -> ZkSyncEraTestnet
+            Moonbeam, MoonbeamTestnet -> MoonbeamTestnet
+            Manta, MantaTestnet -> MantaTestnet
+            PolygonZkEVM, PolygonZkEVMTestnet -> PolygonZkEVMTestnet
+            Base, BaseTestnet -> BaseTestnet
+            Moonriver, MoonriverTestnet -> MoonriverTestnet
+            Mantle, MantleTestnet -> MantleTestnet
+            Flare, FlareTestnet -> FlareTestnet
+            Taraxa, TaraxaTestnet -> TaraxaTestnet
+            Koinos, KoinosTestnet -> KoinosTestnet
+            Blast, BlastTestnet -> BlastTestnet
+            Cyber, CyberTestnet -> CyberTestnet
+            Sei, SeiTestnet -> SeiTestnet
+            Sui, SuiTestnet -> SuiTestnet
+            EnergyWebChain, EnergyWebChainTestnet -> EnergyWebChainTestnet
+            EnergyWebX, EnergyWebXTestnet -> EnergyWebXTestnet
+            Casper, CasperTestnet -> CasperTestnet
+            Core, CoreTestnet -> CoreTestnet
+            Chiliz, ChilizTestnet -> ChilizTestnet
+            VanarChain, VanarChainTestnet -> VanarChainTestnet
+            OdysseyChain, OdysseyChainTestnet -> OdysseyChainTestnet
+            Bitrock, BitrockTestnet -> BitrockTestnet
+            Sonic, SonicTestnet -> SonicTestnet
+            ApeChain, ApeChainTestnet -> ApeChainTestnet
             else -> null
         }
     }
 
+    @Suppress("LongMethod")
     fun getSupportedCurves(): List<EllipticCurve> {
         return when (this) {
             Unknown -> emptyList()
             Tezos,
-            XRP -> listOf(EllipticCurve.Secp256k1, EllipticCurve.Ed25519)
+            -> listOf(
+                EllipticCurve.Secp256k1,
+                EllipticCurve.Ed25519,
+                EllipticCurve.Ed25519Slip0010,
+            )
+
+            XRP,
+            -> listOf(EllipticCurve.Secp256k1, EllipticCurve.Ed25519)
+
             Arbitrum, ArbitrumTestnet,
             Bitcoin, BitcoinTestnet,
             BitcoinCash, BitcoinCashTestnet,
             Binance, BinanceTestnet,
             Ethereum, EthereumTestnet,
+            Kava, KavaTestnet,
+            Telos, TelosTestnet,
             EthereumClassic, EthereumClassicTestnet,
             Polygon, PolygonTestnet,
             Avalanche, AvalancheTestnet,
@@ -297,16 +550,77 @@ enum class Blockchain(
             Gnosis,
             Dash,
             Optimism, OptimismTestnet,
-            EthereumFair, EthereumPow, EthereumPowTestnet,
-            SaltPay, SaltPayTestnet -> listOf(EllipticCurve.Secp256k1)
+            Dischain, EthereumPow, EthereumPowTestnet,
+            Kaspa,
+            Ravencoin, RavencoinTestnet,
+            Cosmos, CosmosTestnet,
+            TerraV1, TerraV2,
+            Cronos,
+            OctaSpace, OctaSpaceTestnet,
+            Decimal, DecimalTestnet,
+            XDC, XDCTestnet,
+            VeChain, VeChainTestnet,
+            Playa3ull,
+            Shibarium, ShibariumTestnet,
+            Aurora, AuroraTestnet,
+            Areon, AreonTestnet,
+            PulseChain, PulseChainTestnet,
+            ZkSyncEra, ZkSyncEraTestnet,
+            Nexa, NexaTestnet,
+            Moonbeam, MoonbeamTestnet,
+            Manta, MantaTestnet,
+            PolygonZkEVM, PolygonZkEVMTestnet,
+            Radiant,
+            Fact0rn,
+            Base, BaseTestnet,
+            Moonriver, MoonriverTestnet,
+            Mantle, MantleTestnet,
+            Flare, FlareTestnet,
+            Taraxa, TaraxaTestnet,
+            Koinos, KoinosTestnet,
+            Filecoin,
+            Blast, BlastTestnet,
+            Cyber, CyberTestnet,
+            Sei, SeiTestnet,
+            InternetComputer,
+            EnergyWebChain, EnergyWebChainTestnet,
+            Core, CoreTestnet,
+            Casper, CasperTestnet,
+            Chiliz, ChilizTestnet,
+            VanarChain, VanarChainTestnet,
+            Xodex,
+            Canxium,
+            Clore,
+            OdysseyChain, OdysseyChainTestnet,
+            Bitrock, BitrockTestnet,
+            Sonic, SonicTestnet,
+            ApeChain, ApeChainTestnet,
+            -> listOf(EllipticCurve.Secp256k1)
+
             Stellar, StellarTestnet,
             Solana, SolanaTestnet,
-            Cardano,
-            CardanoShelley,
-            Polkadot, PolkadotTestnet, Kusama -> listOf(EllipticCurve.Ed25519)
+            Polkadot, PolkadotTestnet,
+            Kusama,
+            AlephZero, AlephZeroTestnet,
+            Joystream,
+            Bittensor,
+            TON, TONTestnet,
+            Near, NearTestnet,
+            Aptos, AptosTestnet,
+            Algorand, AlgorandTestnet,
+            Hedera, HederaTestnet,
+            Sui, SuiTestnet,
+            EnergyWebX, EnergyWebXTestnet,
+            -> listOf(EllipticCurve.Ed25519, EllipticCurve.Ed25519Slip0010)
+
+            Cardano -> listOf(EllipticCurve.Ed25519) // todo until cardano support in wallet 2
+
+            Chia, ChiaTestnet,
+            -> listOf(EllipticCurve.Bls12381G2Aug)
         }
     }
 
+    @Suppress("CyclomaticComplexMethod", "LongMethod")
     fun getChainId(): Int? {
         return when (this) {
             Arbitrum -> Chain.Arbitrum.id
@@ -314,7 +628,7 @@ enum class Blockchain(
             Avalanche -> Chain.Avalanche.id
             AvalancheTestnet -> Chain.AvalancheTestnet.id
             Ethereum -> Chain.Mainnet.id
-            EthereumTestnet -> Chain.Rinkeby.id
+            EthereumTestnet -> Chain.Goerli.id
             EthereumClassic -> Chain.EthereumClassicMainnet.id
             EthereumClassicTestnet -> Chain.EthereumClassicTestnet.id
             Fantom -> Chain.Fantom.id
@@ -327,125 +641,173 @@ enum class Blockchain(
             Gnosis -> Chain.Gnosis.id
             Optimism -> Chain.Optimism.id
             OptimismTestnet -> Chain.OptimismTestnet.id
-            EthereumFair -> Chain.EthereumFair.id
+            Dischain -> Chain.EthereumFair.id
             EthereumPow -> Chain.EthereumPow.id
             EthereumPowTestnet -> Chain.EthereumPowTestnet.id
-            SaltPay -> Chain.SaltPay.id
-            SaltPayTestnet -> Chain.SaltPayTestnet.id
+            Kava -> Chain.Kava.id
+            KavaTestnet -> Chain.KavaTestnet.id
+            Telos -> Chain.Telos.id
+            TelosTestnet -> Chain.TelosTestnet.id
+            Cronos -> Chain.Cronos.id
+            OctaSpace -> Chain.OctaSpace.id
+            OctaSpaceTestnet -> Chain.OctaSpaceTestnet.id
+            Decimal -> Chain.Decimal.id
+            DecimalTestnet -> Chain.DecimalTestnet.id
+            XDC -> Chain.Xdc.id
+            XDCTestnet -> Chain.XdcTestnet.id
+            Playa3ull -> Chain.Playa3ull.id
+            Shibarium -> Chain.Shibarium.id
+            ShibariumTestnet -> Chain.ShibariumTestnet.id
+            Aurora -> Chain.Aurora.id
+            AuroraTestnet -> Chain.AuroraTestnet.id
+            Areon -> Chain.Areon.id
+            AreonTestnet -> Chain.AreonTestnet.id
+            PulseChain -> Chain.PulseChain.id
+            PulseChainTestnet -> Chain.PulseChainTestnet.id
+            ZkSyncEra -> Chain.ZkSyncEra.id
+            ZkSyncEraTestnet -> Chain.ZkSyncEraTestnet.id
+            Moonbeam -> Chain.Moonbeam.id
+            MoonbeamTestnet -> Chain.MoonbeamTestnet.id
+            Manta -> Chain.Manta.id
+            MantaTestnet -> Chain.MantaTestnet.id
+            PolygonZkEVM -> Chain.PolygonZkEVM.id
+            PolygonZkEVMTestnet -> Chain.PolygonZkEVMTestnet.id
+            Base -> Chain.Base.id
+            BaseTestnet -> Chain.BaseTestnet.id
+            Moonriver -> Chain.Moonriver.id
+            MoonriverTestnet -> Chain.MoonriverTestnet.id
+            Mantle -> Chain.Mantle.id
+            MantleTestnet -> Chain.MantleTestnet.id
+            Flare -> Chain.Flare.id
+            FlareTestnet -> Chain.FlareTestnet.id
+            Taraxa -> Chain.Taraxa.id
+            TaraxaTestnet -> Chain.TaraxaTestnet.id
+            Blast -> Chain.Blast.id
+            BlastTestnet -> Chain.BlastTestnet.id
+            Cyber -> Chain.Cyber.id
+            CyberTestnet -> Chain.CyberTestnet.id
+            EnergyWebChain -> Chain.EnergyWebChain.id
+            EnergyWebChainTestnet -> Chain.EnergyWebChainTestnet.id
+            Core -> Chain.Core.id
+            CoreTestnet -> Chain.CoreTestnet.id
+            Xodex -> Chain.Xodex.id
+            Canxium -> Chain.Canxium.id
+            Chiliz -> Chain.Chiliz.id
+            VanarChain -> Chain.VanarChain.id
+            VanarChainTestnet -> Chain.VanarChainTestnet.id
+            ChilizTestnet -> Chain.ChilizTestnet.id
+            OdysseyChain -> Chain.OdysseyChain.id
+            OdysseyChainTestnet -> Chain.OdysseyChainTestnet.id
+            Bitrock -> Chain.Bitrock.id
+            BitrockTestnet -> Chain.BitrockTestnet.id
+            Sonic -> Chain.Sonic.id
+            SonicTestnet -> Chain.SonicTestnet.id
+            ApeChain -> Chain.ApeChain.id
+            ApeChainTestnet -> Chain.ApeChainTestnet.id
             else -> null
         }
     }
 
     fun derivationPath(style: DerivationStyle?): DerivationPath? {
         if (style == null) return null
-        if (!getSupportedCurves().contains(EllipticCurve.Secp256k1) &&
-            !getSupportedCurves().contains(EllipticCurve.Ed25519)
+        val supportedCurves = getSupportedCurves()
+        if (EllipticCurve.Secp256k1 !in supportedCurves &&
+            EllipticCurve.Ed25519 !in supportedCurves &&
+            EllipticCurve.Ed25519Slip0010 !in supportedCurves
         ) {
             return null
         }
-
-        return when (this) {
-            Stellar, StellarTestnet, Solana, SolanaTestnet -> {
-                //Path according to sep-0005. https://github.com/stellar/stellar-protocol/blob/master/ecosystem/sep-0005.md
-                // Solana path consistent with TrustWallet:
-                // https://github.com/trustwallet/wallet-core/blob/456f22d6a8ce8a66ccc73e3b42bcfec5a6afe53a/registry.json#L1013
-                DerivationPath(
-                    path = listOf(
-                        DerivationNode.Hardened(BIP44.purpose),
-                        DerivationNode.Hardened(coinType(style)),
-                        DerivationNode.Hardened(0)
-                    )
-                )
-            }
-            CardanoShelley -> { //We use shelley for all new cards with HD wallets feature
-                //Path according to CIP-1852. https://cips.cardano.org/cips/cip1852/
-                DerivationPath(
-                    path = listOf(
-                        DerivationNode.Hardened(1852),
-                        DerivationNode.Hardened(coinType(style)),
-                        DerivationNode.Hardened(0),
-                        DerivationNode.NonHardened(0),
-                        DerivationNode.NonHardened(0)
-                    )
-                )
-            }
-            else -> {
-                // Standard BIP44
-                val bip44 = BIP44(
-                    coinType = coinType(style),
-                    account = 0,
-                    change = BIP44.Chain.External,
-                    addressIndex = 0
-                )
-                bip44.buildPath()
-            }
-        }
+        return style.getConfig().derivations(this).values.first()
     }
 
-    //    https://github.com/satoshilabs/slips/blob/master/slip-0044.md
-    fun coinType(style: DerivationStyle): Long {
-        if (isTestnet()) return 1
+    fun canHandleTokens(): Boolean {
+        // disable tokens support for Taraxa evm until it's not tested
+        if (this == Taraxa || this == EnergyWebChain) return false
 
-        val ethCoinType = 60L
-
-        if (style == DerivationStyle.NEW && this.isEvm()) return ethCoinType
+        if (isEvm()) return true
 
         return when (this) {
-            Bitcoin, Ducatus -> 0
-            Litecoin -> 2
-            Dogecoin -> 3
-            Dash -> 5
-            Ethereum, EthereumPow, EthereumFair -> ethCoinType
-            EthereumClassic -> 61
-            RSK -> 137
-            XRP -> 144
-            BitcoinCash -> 145
-            Stellar -> 148
-            Polkadot -> 354
-            Kusama -> 434
-            Solana -> 501
-            Binance -> 714
-            Polygon -> 966
-            Fantom -> 1007
-            Tezos -> 1729
-            Cardano, CardanoShelley -> 1815
-            Avalanche -> 9000
-            Arbitrum -> 9001
-            BSC -> 9006
-            Tron -> 195
-            Gnosis, SaltPay -> 700
-            Optimism -> 614
-            else -> throw UnsupportedOperationException()
-        }
-    }
+            Binance, BinanceTestnet,
+            Solana, SolanaTestnet,
+            Tron, TronTestnet,
+            TerraV1,
+            VeChain, VeChainTestnet,
+            Hedera, HederaTestnet,
+            TON, TONTestnet,
+            Cardano,
+            Kaspa,
+            -> true
 
-    fun canHandleTokens(): Boolean = when (this) {
-        Arbitrum, ArbitrumTestnet,
-        Ethereum, EthereumTestnet,
-        BSC, BSCTestnet,
-        Binance, BinanceTestnet,
-        Polygon, PolygonTestnet,
-        Avalanche, AvalancheTestnet,
-        Fantom, FantomTestnet,
-        EthereumClassic, EthereumClassicTestnet,
-        RSK,
-        Solana, SolanaTestnet,
-        Tron, TronTestnet,
-        Gnosis,
-        Optimism, OptimismTestnet,
-        EthereumFair, EthereumPow, EthereumPowTestnet,
-        SaltPay, SaltPayTestnet -> true
-        else -> false
+            else -> false
+        }
     }
 
     fun isEvm(): Boolean = getChainId() != null
 
     fun isFeeApproximate(amountType: AmountType): Boolean = when (this) {
         Fantom, FantomTestnet,
-        Tron, TronTestnet -> amountType is AmountType.Token
+        Tron, TronTestnet,
+        Avalanche, AvalancheTestnet,
+        EthereumPow,
+        Cronos,
+        VeChain, VeChainTestnet,
+        XDC, XDCTestnet,
+        -> amountType is AmountType.Token
+
         Arbitrum, ArbitrumTestnet,
-        Optimism, OptimismTestnet -> true
+        Stellar, StellarTestnet,
+        Optimism, OptimismTestnet,
+        TON, TONTestnet,
+        Near, NearTestnet,
+        Aptos, AptosTestnet,
+        Hedera, HederaTestnet,
+        PulseChain, PulseChainTestnet,
+        Aurora, AuroraTestnet,
+        Manta, MantaTestnet,
+        Mantle, MantleTestnet,
+        ZkSyncEra, ZkSyncEraTestnet,
+        PolygonZkEVM, PolygonZkEVMTestnet,
+        Taraxa, TaraxaTestnet,
+        Base, BaseTestnet,
+        Koinos, KoinosTestnet,
+        -> true
+
         else -> false
+    }
+
+    fun feePaidCurrency(): FeePaidCurrency = when (this) {
+        VeChain, VeChainTestnet -> FeePaidCurrency.Token(VeChainWalletManager.VTHO_TOKEN)
+        TerraV1 -> FeePaidCurrency.SameCurrency
+        Koinos, KoinosTestnet -> FeePaidCurrency.FeeResource("Mana")
+        else -> FeePaidCurrency.Coin
+    }
+
+    /**
+     * List of supported blockchains for generating XPUB with BIP44 derivation.
+     * @see <a href="https://iancoleman.io/bip39/">bip39</a>
+     */
+    fun isBip44DerivationStyleXPUB(): Boolean = when (this) {
+        Bitcoin, BitcoinTestnet,
+        BitcoinCash, BitcoinCashTestnet,
+        Litecoin,
+        Dogecoin,
+        Dash,
+        Kaspa,
+        Ravencoin, RavencoinTestnet,
+        Ducatus,
+        -> true
+        else -> false
+    }
+
+    /**
+     * Returns is fee in given network is zero
+     * For now actual only for one network
+     */
+    fun isNetworkFeeZero(): Boolean {
+        return when (this) {
+            Xodex -> true
+            else -> false
+        }
     }
 
     companion object {
@@ -472,5 +834,10 @@ enum class Blockchain(
             .filter { it.isTestnet() == isTestnet }
             .filter { it.getSupportedCurves().size == 1 }
             .filter { it.getSupportedCurves()[0] == EllipticCurve.Ed25519 }
+
+        fun ed25519Blockchains(isTestnet: Boolean): List<Blockchain> = values
+            .filter {
+                it.isTestnet() == isTestnet && it.getSupportedCurves().contains(EllipticCurve.Ed25519)
+            }
     }
 }

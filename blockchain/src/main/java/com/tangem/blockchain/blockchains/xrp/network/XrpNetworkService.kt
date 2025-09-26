@@ -7,8 +7,8 @@ import com.tangem.blockchain.network.MultiNetworkProvider
 class XrpNetworkService(providers: List<XrpNetworkProvider>) : XrpNetworkProvider {
 
     private val multiProvider = MultiNetworkProvider(providers)
-    override val host: String
-        get() = multiProvider.currentProvider.host
+    override val baseUrl: String
+        get() = multiProvider.currentProvider.baseUrl
 
     override suspend fun getInfo(address: String): Result<XrpInfoResponse> =
         multiProvider.performRequest(XrpNetworkProvider::getInfo, address)
@@ -16,8 +16,7 @@ class XrpNetworkService(providers: List<XrpNetworkProvider>) : XrpNetworkProvide
     override suspend fun sendTransaction(transaction: String): SimpleResult =
         multiProvider.performRequest(XrpNetworkProvider::sendTransaction, transaction)
 
-    override suspend fun getFee(): Result<XrpFeeResponse> =
-        multiProvider.performRequest(XrpNetworkProvider::getFee)
+    override suspend fun getFee(): Result<XrpFeeResponse> = multiProvider.performRequest(XrpNetworkProvider::getFee)
 
     override suspend fun checkIsAccountCreated(address: String): Boolean {
         return multiProvider.currentProvider.checkIsAccountCreated(address)

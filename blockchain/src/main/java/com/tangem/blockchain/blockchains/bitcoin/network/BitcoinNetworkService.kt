@@ -9,12 +9,11 @@ import kotlinx.coroutines.coroutineScope
 import java.math.BigDecimal
 import java.math.RoundingMode
 
-
 open class BitcoinNetworkService(providers: List<BitcoinNetworkProvider>) : BitcoinNetworkProvider {
 
     private val multiProvider = MultiNetworkProvider(providers)
-    override val host: String
-        get() = multiProvider.currentProvider.host
+    override val baseUrl: String
+        get() = multiProvider.currentProvider.baseUrl
 
     override suspend fun getInfo(address: String): Result<BitcoinAddressInfo> =
         multiProvider.performRequest(BitcoinNetworkProvider::getInfo, address)
@@ -30,14 +29,13 @@ open class BitcoinNetworkService(providers: List<BitcoinNetworkProvider>) : Bitc
                 BitcoinFee(
                     minimalPerKb = fees.map { it.minimalPerKb }.sorted().drop(1).average(),
                     normalPerKb = fees.map { it.normalPerKb }.sorted().drop(1).average(),
-                    priorityPerKb = fees.map { it.priorityPerKb }.sorted().drop(1).average()
-
+                    priorityPerKb = fees.map { it.priorityPerKb }.sorted().drop(1).average(),
                 )
             } else {
                 BitcoinFee(
                     minimalPerKb = fees.map { it.minimalPerKb }.maxOrNull()!!,
                     normalPerKb = fees.map { it.normalPerKb }.maxOrNull()!!,
-                    priorityPerKb = fees.map { it.priorityPerKb }.maxOrNull()!!
+                    priorityPerKb = fees.map { it.priorityPerKb }.maxOrNull()!!,
                 )
             }
 
@@ -52,6 +50,6 @@ open class BitcoinNetworkService(providers: List<BitcoinNetworkProvider>) : Bitc
         multiProvider.performRequest(BitcoinNetworkProvider::getSignatureCount, address)
 
     private fun List<BigDecimal>.average(): BigDecimal =
-        this.reduce { acc, number -> acc + number }.divide(this.size.toBigDecimal())
+        this.reduce { acc, number -> acc + number }.divide(this.size.toBigDecimal(), RoundingMode.HALF_UP)
             .setScale(Blockchain.Bitcoin.decimals(), RoundingMode.HALF_UP)
 }

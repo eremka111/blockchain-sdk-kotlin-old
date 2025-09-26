@@ -4,25 +4,24 @@ import android.util.Log
 import com.tangem.blockchain.blockchains.binance.network.BinanceInfoResponse
 import com.tangem.blockchain.blockchains.binance.network.BinanceNetworkProvider
 import com.tangem.blockchain.common.*
+import com.tangem.blockchain.common.transaction.Fee
+import com.tangem.blockchain.common.transaction.TransactionFee
+import com.tangem.blockchain.common.transaction.TransactionSendResult
 import com.tangem.blockchain.extensions.Result
-import com.tangem.blockchain.extensions.SimpleResult
 import com.tangem.common.CompletionResult
 
 class BinanceWalletManager(
-        wallet: Wallet,
-        private val transactionBuilder: BinanceTransactionBuilder,
-        private val networkProvider: BinanceNetworkProvider,
-        presetTokens: MutableSet<Token>
-) : WalletManager(wallet, presetTokens), TransactionSender {
+    wallet: Wallet,
+    private val transactionBuilder: BinanceTransactionBuilder,
+    private val networkProvider: BinanceNetworkProvider,
+) : WalletManager(wallet) {
 
     private val blockchain = wallet.blockchain
 
-    override val currentHost: String
-        get() = networkProvider.host
+    override val currentHost: String get() = networkProvider.baseUrl
 
-    override suspend fun update() {
-        val result = networkProvider.getInfo(wallet.address)
-        when (result) {
+    override suspend fun updateInternal() {
+        when (val result = networkProvider.getInfo(wallet.address)) {
             is Result.Success -> updateWallet(result.data)
             is Result.Failure -> updateError(result.error)
         }
@@ -48,30 +47,34 @@ class BinanceWalletManager(
     }
 
     override suspend fun send(
-            transactionData: TransactionData, signer: TransactionSigner
-    ): SimpleResult {
-        val buildTransactionResult = transactionBuilder.buildToSign(transactionData)
-        return when (buildTransactionResult) {
-            is Result.Failure -> SimpleResult.Failure(buildTransactionResult.error)
+        transactionData: TransactionData,
+        signer: TransactionSigner,
+    ): Result<TransactionSendResult> {
+        return when (val buildTransactionResult = transactionBuilder.buildToSign(transactionData)) {
+            is Result.Failure -> buildTransactionResult
             is Result.Success -> {
-                val signerResponse = signer.sign(buildTransactionResult.data, wallet.publicKey)
-                when (signerResponse) {
+                when (val signerResponse = signer.sign(buildTransactionResult.data, wallet.publicKey)) {
                     is CompletionResult.Success -> {
                         val transactionToSend = transactionBuilder.buildToSend(signerResponse.data)
-                        networkProvider.sendTransaction(transactionToSend)
+                        when (val result = networkProvider.sendTransaction(transactionToSend)) {
+                            is Result.Success -> {
+                                transactionData.hash = result.data
+                                wallet.addOutgoingTransaction(transactionData)
+                                Result.Success(TransactionSendResult(result.data))
+                            }
+                            is Result.Failure -> return result
+                        }
                     }
-                    is CompletionResult.Failure -> SimpleResult.fromTangemSdkError(signerResponse.error)
+                    is CompletionResult.Failure -> Result.fromTangemSdkError(signerResponse.error)
                 }
             }
         }
     }
 
-    override suspend fun getFee(amount: Amount, destination: String): Result<List<Amount>> {
-        when (val result = networkProvider.getFee()) {
-            is Result.Success -> return Result.Success(listOf(Amount(result.data, blockchain)))
-            is Result.Failure -> return result
+    override suspend fun getFee(amount: Amount, destination: String): Result<TransactionFee> {
+        return when (val result = networkProvider.getFee()) {
+            is Result.Success -> Result.Success(TransactionFee.Single(Fee.Common(Amount(result.data, blockchain))))
+            is Result.Failure -> result
         }
     }
-
-
 }
